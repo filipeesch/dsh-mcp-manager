@@ -518,8 +518,8 @@ it('warns that a manual client id needs the provider allowlist update instead of
     id: 'srv-manual', name: 'github', type: 'http', url: 'https://api.githubcopilot.com/mcp/', authMode: 'oauth',
     status: 'connected', error: '', toolCount: 1, enabled: true,
     clientId: 'Ov23li…', clientSecretEnv: '', clientName: '', scope: '',
-    redirectUrl: '', redirectUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-manual',
-    redirectDefaultUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-manual',
+    redirectUrl: '', redirectUri: 'http://127.0.0.1:49593/callback',
+    redirectDefaultUri: 'http://127.0.0.1:49593/callback',
   };
   const app = mount(async (url) => {
     if (url.endsWith('/servers')) return response({ servers: [server] });
@@ -536,7 +536,7 @@ it('warns that a manual client id needs the provider allowlist update instead of
   const formEl = content(tree);
   app.reset();
   let form = app.render(formEl.type, formEl.props);
-  const input = nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'http://127.0.0.1:49593/mcp-manager/callback/srv-manual');
+  const input = nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'http://127.0.0.1:49593/callback');
   input.props.onChange({ target: { value: 'localhost:8080' } });
   form = app.render(formEl.type, formEl.props);
   assert.match(text(form), /A manual Client ID is never re-registered/);
@@ -548,8 +548,8 @@ it('edits the redirect URL against the effective default in the OAuth section', 
     id: 'srv-edit', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp', authMode: 'oauth',
     status: 'connected', error: '', toolCount: 1, enabled: true,
     clientId: '', clientSecretEnv: '', clientName: '', scope: '',
-    redirectUrl: 'http://localhost', redirectUri: 'http://localhost:49593/mcp-manager/callback/srv-edit',
-    redirectDefaultUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-edit',
+    redirectUrl: 'http://localhost', redirectUri: 'http://localhost:49593/callback',
+    redirectDefaultUri: 'http://127.0.0.1:49593/callback',
   };
   const app = mount(async (url) => {
     if (url.endsWith('/servers')) return response({ servers: [server] });
@@ -572,8 +572,8 @@ it('edits the redirect URL against the effective default in the OAuth section', 
   assert.ok(redirectInput, 'the stored override is prefilled');
   // The placeholder is what would apply without the override, so "Use default"
   // shows the address the plugin would really use.
-  assert.equal(redirectInput.props.placeholder, 'http://127.0.0.1:49593/mcp-manager/callback/srv-edit');
-  assert.match(text(form), /Only loopback hosts or an origin listed in config\.publicOrigins are accepted/);
+  assert.equal(redirectInput.props.placeholder, 'http://127.0.0.1:49593/callback');
+  assert.match(text(form), /Only loopback addresses are accepted/);
   assert.match(text(form), /Use default/);
 
   // Editing the value announces that the next authentication re-registers.
@@ -585,6 +585,59 @@ it('edits the redirect URL against the effective default in the OAuth section', 
   // "Use default" clears it so the derived default applies again.
   nodes(form).find((node) => node.type === 'button' && text(node) === 'Use default').props.onClick();
   form = app.render(formEl.type, formEl.props);
-  assert.equal(nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'http://127.0.0.1:49593/mcp-manager/callback/srv-edit').props.value, '');
+  assert.equal(nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'http://127.0.0.1:49593/callback').props.value, '');
   assert.doesNotMatch(text(form), /registers the client again on the next Authenticate/);
+});
+
+it('renders the global callback section collapsed with a status line and an error badge', async () => {
+  const calls = [];
+  const settings = {
+    onDemandToolInjection: false,
+    oauthCallback: { mode: 'fixed', host: 'localhost', port: 8765, path: '/callback' },
+    callbackStatus: {
+      listeners: [{ port: 8765, addresses: ['127.0.0.1', '::1'], paths: ['/callback'], pending: 1 }],
+      lastError: 'cannot open the OAuth callback listener at 127.0.0.1:8765: port 8765 is already in use',
+    },
+  };
+  let saved = 0;
+  const app = mount(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith('/servers')) return response({ servers: [] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings/callback')) return response({ oauthCallback: settings.oauthCallback, callbackStatus: settings.callbackStatus });
+    if (url.endsWith('/settings')) return response(settings);
+    return response({});
+  });
+  let tree = app.render();
+  app.effects();
+  await settle();
+  tree = app.render();
+  const sectionEl = nodes(tree).find((node) => node.props?.settings && typeof node.props?.onSaved === 'function');
+  assert.ok(sectionEl, 'the callback section renders on the page');
+  app.reset();
+  let section = app.render(sectionEl.type, { ...sectionEl.props, onSaved: () => { saved += 1; } });
+  assert.match(text(section), /OAuth callback/);
+  assert.match(text(section), /Fixed address \u00b7 1 listeners/);
+  assert.match(text(section), /Listener error/);
+
+  const toggle = nodes(section).find((node) => node.type === 'button' && node.props['aria-label'] === 'OAuth callback');
+  assert.ok(toggle, 'the header toggles the section');
+  assert.equal(toggle.props['aria-expanded'], false);
+  toggle.props.onClick();
+  section = app.render(sectionEl.type, { ...sectionEl.props, onSaved: () => { saved += 1; } });
+  const values = nodes(section).filter((node) => node.type === 'input').map((node) => node.props.value);
+  assert.ok(values.includes('localhost'), 'the hostname is editable');
+  assert.ok(values.includes('8765'), 'the fixed port is editable');
+  assert.ok(values.includes('/callback'), 'the path is editable');
+  assert.match(text(section), /127\.0\.0\.1:8765/);
+  assert.match(text(section), /port 8765 is already in use/);
+
+  const save = nodes(section).find((node) => node.type === 'button' && text(node) === 'Save');
+  assert.ok(save, 'the section can be saved');
+  await save.props.onClick();
+  await settle();
+  const put = calls.find((call) => call.url.endsWith('/settings/callback'));
+  assert.ok(put, 'saving posts the configuration');
+  assert.deepEqual(JSON.parse(put.options.body), { mode: 'fixed', host: 'localhost', port: '8765', path: '/callback' });
+  assert.equal(saved, 1);
 });

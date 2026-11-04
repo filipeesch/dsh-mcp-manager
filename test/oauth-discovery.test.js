@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, it } from 'node:test';
+import { after, afterEach, it } from 'node:test';
 
 // STATE_PATH is derived from homedir() at module evaluation: HOME on POSIX,
 // USERPROFILE on Windows. Pin both before importing; DSH_HOME alone is not enough.
@@ -22,10 +22,16 @@ mkdirSync(join(scratchHome, '.dsh'), { recursive: true });
 const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
 
 const { apply } = await import('../lib/index.js');
+const { deliverCallback, redirectOf } = await import('./helpers/oauth-harness.js');
 
 /** Minimal ctx: enough for apply() to mount its route without a real harness. */
+const testDisposers = [];
+afterEach(() => { for (const dispose of testDisposers.splice(0).reverse()) dispose(); });
+
 function makeCtx(config = {}) {
   const routes = [];
+  const cleanup = [];
+  const effect = (fn) => { const dispose = fn(); if (typeof dispose === 'function') cleanup.push(dispose); return () => {}; };
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
     tools: { guard: () => () => {}, register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
@@ -34,18 +40,16 @@ function makeCtx(config = {}) {
     on: () => () => {},
     inject: (names, callback) => {
       if (typeof callback === 'function' && names.includes('webServer')) {
-        callback({
-          webServer: ctx.webServer,
-          get: () => undefined,
-          effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
-        });
+        callback({ webServer: ctx.webServer, get: () => undefined, effect });
       }
       return { dispose: () => {} };
     },
-    effect: (fn) => { const dispose = fn(); return () => { if (typeof dispose === 'function') dispose(); }; },
+    effect,
   };
   apply(ctx, config);
-  return { routes, handler: routes[0]?.handler };
+  const dispose = () => { for (const fn of cleanup.splice(0).reverse()) fn(); };
+  testDisposers.push(dispose);
+  return { routes, handler: routes[0]?.handler, dispose };
 }
 
 /** Call the mounted route with a minimal req/res pair; returns the raw body too. */
@@ -162,31 +166,24 @@ const state = () => JSON.parse(readFileSync(statePath, 'utf8'));
 // SEP-837: a strict OIDC registration endpoint distinguishes locally hosted
 // clients from remote web clients. These are synthetic Host headers only;
 // every network request goes to the loopback stub, never to these hostnames.
-for (const [host, applicationType] of [
-  ['localhost:3080', 'native'],
-  ['127.0.0.1:3080', 'native'],
-  ['127.0.0.2:3080', 'native'],
-  ['[::1]:3080', 'native'],
-  ['remote.example.test:3080', 'web'],
-  ['localhost.example.test:3080', 'web'],
-  ['127.example.test:3080', 'web'],
-]) {
-  it(`issue #21: registers ${host} as ${applicationType}`, async (t) => {
-    const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: applicationType });
-    t.after(() => stub.close());
-    // Test-only origins also satisfy hosts that require an explicit allowlist.
-    const { handler } = makeCtx({ publicOrigins: [`http://${host}`] });
-    const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: `type-${host.replace(/[^A-Za-z0-9_-]/g, '_')}`, type: 'http', url: stub.mcpUrl });
-    assert.equal(created.code, 201, created.text);
-    const id = created.json.server.id;
-    const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host });
-    assert.equal(auth.code, 200, auth.text);
-    assert.equal(stub.registrations.length, 1);
-    assert.equal(stub.registrations[0].application_type, applicationType);
-    assert.deepEqual(stub.registrations[0].redirect_uris, [`http://${host}/mcp-manager/callback/${id}`]);
-    assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('client_id'), 'dcr-client');
-  });
-}
+// SEP-837: the callback is always a loopback listener now, so a registration is
+// always a native client. The Host header of the request that starts the flow
+// has no say in it any more.
+it('issue #21: registers the loopback callback as a native client', async (t) => {
+  const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: 'native' });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'type-native', type: 'http', url: stub.mcpUrl });
+  assert.equal(created.code, 201, created.text);
+  const id = created.json.server.id;
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(auth.code, 200, auth.text);
+  assert.equal(stub.registrations.length, 1);
+  assert.equal(stub.registrations[0].application_type, 'native');
+  assert.deepEqual(stub.registrations[0].redirect_uris, [redirectOf(auth.json.authorizeUrl)]);
+  assert.match(redirectOf(auth.json.authorizeUrl), /^http:\/\/localhost:\d+\/callback$/);
+  assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('client_id'), 'dcr-client');
+});
 
 it('issue #21: strict native registration completes PKCE, connects, and reuses only the same redirect', async (t) => {
   const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: 'native' });
@@ -202,15 +199,15 @@ it('issue #21: strict native registration completes PKCE, connects, and reuses o
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 200, auth.text);
   const authorize = new URL(auth.json.authorizeUrl);
-  const redirect = `http://127.0.0.1:3080/mcp-manager/callback/${id}`;
-  assert.equal(authorize.searchParams.get('redirect_uri'), redirect);
+  const redirect = redirectOf(auth.json.authorizeUrl);
+  assert.match(redirect, /^http:\/\/localhost:\d+\/callback$/);
   assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
   assert.equal(stub.registrations[0].token_endpoint_auth_method, 'none');
   assert.match(stub.registrations[0].client_name, /^dsh-mcp-manager-/);
-  const invalid = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=synthetic-code&state=wrong`);
-  assert.match(invalid.text, /expired or invalid/);
+  const invalid = await deliverCallback(auth.json.authorizeUrl, { state: 'wrong' });
+  assert.match(invalid.text, /does not match any pending authorization/);
   assert.equal(stub.forms.length, 0, 'an invalid state must never exchange a code');
-  const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=synthetic-code&state=${authorize.searchParams.get('state')}`);
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
   assert.equal(stub.forms.length, 1);
   assert.equal(stub.forms[0].get('redirect_uri'), redirect);
@@ -222,24 +219,36 @@ it('issue #21: strict native registration completes PKCE, connects, and reuses o
   assert.equal(connected.status, 'connected');
   assert.equal(connected.toolCount, 1);
   assert.equal(state().servers.find((server) => server.id === id).oauth.clientId, 'dcr-client');
-  assert.equal(stub.registrations.length, 1, 'callback must reuse the registered redirect');
-  assert.equal((await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`)).code, 200);
-  assert.equal(stub.registrations.length, 1, 'a second login on the same origin reuses the client');
-  const changed = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'localhost:3081' });
+  assert.equal(stub.registrations.length, 1, 'the callback reused the registered redirect');
+  // Automatic mode allocates a port per authorization, so a second login
+  // legitimately registers again for the new URI. A fixed or overridden URI is
+  // what keeps the client stable across logins.
+  const second = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(second.code, 200, second.text);
+  assert.notEqual(redirectOf(second.json.authorizeUrl), redirect);
+  assert.equal(stub.registrations.length, 2);
+  // A per-server override changes the exact URI, so the client is registered
+  // again for it: a registration is bound to one redirect.
+  const edited = await request(handler, 'PUT', `/mcp-manager/api/servers/${id}`, {
+    name: 'native-roundtrip', type: 'http', url: stub.mcpUrl, authMode: 'oauth', redirectUrl: '127.0.0.1',
+  });
+  assert.equal(edited.code, 200, edited.text);
+  const changed = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(changed.code, 200, changed.text);
-  assert.equal(stub.registrations.length, 2, 'changing origin requires registration for the new exact redirect');
-  // A request-derived default names the loopback IP, so a `localhost` Host
-  // becomes 127.0.0.1 while the port the browser used is kept.
-  assert.deepEqual(stub.registrations[1].redirect_uris, [`http://127.0.0.1:3081/mcp-manager/callback/${id}`]);
+  assert.equal(stub.registrations.length, 3, 'changing the redirect URI requires registration for the new exact redirect');
+  assert.match(redirectOf(changed.json.authorizeUrl), /^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+  assert.deepEqual(stub.registrations[2].redirect_uris, [redirectOf(changed.json.authorizeUrl)]);
 });
 
 it('issue #21: reports a provider metadata rejection without assuming DCR is unsupported or retrying it', async (t) => {
-  const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: 'native' });
+  // The callback is a native loopback client now, so a provider that only
+  // registers web clients is the rejection this covers.
+  const stub = await startStub({ advertiseRegistration: true, requiredApplicationType: 'web' });
   t.after(() => stub.close());
-  const { handler } = makeCtx({ publicOrigins: ['http://remote.example.test:3080'] });
+  const { handler } = makeCtx();
   const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'rejected-web', type: 'http', url: stub.mcpUrl });
   const id = created.json.server.id;
-  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'remote.example.test:3080' });
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 500);
   assert.match(auth.json.error, /HTTP 400.*invalid_client_metadata/);
   assert.ok(!auth.json.error.includes('may not support'));
@@ -268,7 +277,7 @@ it('discovers a path-carrying authorization server and honours a manual client i
   assert.equal(authorize.searchParams.get('scope'), 'repo read:org');
   assert.equal(authorize.searchParams.get('code_challenge_method'), 'S256');
   assert.ok(authorize.searchParams.get('code_challenge'), 'PKCE challenge must be sent');
-  assert.equal(authorize.searchParams.get('redirect_uri'), `http://127.0.0.1:3080/mcp-manager/callback/${created.json.server.id}`);
+  assert.match(redirectOf(auth.json.authorizeUrl), /^http:\/\/localhost:\d+\/callback$/);
 
   // The chain used the advertised pointer, never guessed an origin-level AS URL,
   // and never attempted dynamic registration for a manually configured client.
@@ -330,9 +339,7 @@ it('sends client_secret only when its environment variable resolves', async () =
   const id = created.json.server.id;
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 200);
-  const flowState = new URL(auth.json.authorizeUrl).searchParams.get('state');
-
-  const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=stub-code&state=${flowState}`);
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   const exchanges = stub.forms.filter(form => form.get('grant_type') === 'authorization_code');
   assert.equal(exchanges.length, 1);
   assert.equal(exchanges[0].get('client_secret'), 'example-secret');
@@ -347,8 +354,7 @@ it('sends client_secret only when its environment variable resolves', async () =
   });
   const secondId = second.json.server.id;
   const secondAuth = await request(handler, 'POST', `/mcp-manager/api/servers/${secondId}/auth`);
-  const secondState = new URL(secondAuth.json.authorizeUrl).searchParams.get('state');
-  const failed = await request(handler, 'GET', `/mcp-manager/callback/${secondId}?code=stub-code&state=${secondState}`);
+  const failed = await deliverCallback(secondAuth.json.authorizeUrl);
   assert.match(failed.text, /DSH_MM_MISSING_SECRET/);
   delete process.env.DSH_MM_TEST_SECRET;
 

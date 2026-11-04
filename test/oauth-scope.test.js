@@ -24,6 +24,7 @@ mkdirSync(join(scratchHome, '.dsh'), { recursive: true });
 const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
 
 const { apply, parseBearerChallenge, cleanScope, scopeList } = await import('../lib/index.js');
+const { deliverCallback } = await import('./helpers/oauth-harness.js');
 
 const testDisposers = [];
 beforeEach(() => writeFileSync(statePath, JSON.stringify({ servers: [] })));
@@ -196,7 +197,7 @@ async function authorize(handler, id) {
 async function login(handler, stub, id, { grant } = {}) {
   const url = await authorize(handler, id);
   stub.requested(grant ?? url.searchParams.get('scope'));
-  const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=stub-code&state=${url.searchParams.get('state')}`);
+  const callback = await deliverCallback(url.toString());
   assert.match(callback.text, /Authorized/, callback.text);
   return url;
 }
