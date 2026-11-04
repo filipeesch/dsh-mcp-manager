@@ -6,7 +6,7 @@ import { it } from 'node:test';
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
 
 // Run the real module factory with a tiny hook harness; no browser or dependencies.
-function mount(fetch, language = "en") {
+function mount(fetch, language = "en", globals = {}) {
   let dictionaries, spec, disposed = false;
   const effectLabels = [];
   const t = (key, values = {}) => (dictionaries[language]?.[key] ?? dictionaries.en[key] ?? key)
@@ -28,6 +28,8 @@ function mount(fetch, language = "en") {
     fetch,
     setInterval: () => 1,
     clearInterval: () => {},
+    setTimeout: () => 1,
+    ...globals,
   });
   let dispose;
   exported.apply({
@@ -368,4 +370,221 @@ it('offers a per-workspace enable switch for global and workspace-local servers'
   const bodies = calls.filter((call) => call.url.endsWith('/workspaces/server-state')).map((call) => JSON.parse(call.options.body));
   assert.ok(bodies.some((body) => body.name === 'github' && body.enabled === true));
   await new Promise((resolve) => setImmediate(resolve));
+});
+
+it('shows the effective redirect URI with a copy action and a pending-registration cue', async () => {
+  const server = {
+    id: 'srv-redirect', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp',
+    authMode: 'oauth', status: 'needs-auth', error: '', toolCount: 0, enabled: true,
+    redirectUrl: 'http://localhost',
+    redirectUri: 'http://localhost:49593/mcp-manager/callback/srv-redirect',
+    redirectPending: true,
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-redirect');
+  assert.ok(cardNode, 'the server card renders');
+  app.reset();
+  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-redirect');
+  assert.ok(redirectEl, 'the effective URI element renders on the card');
+  const redirect = app.render(redirectEl.type, redirectEl.props);
+  assert.match(text(redirect), /http:\/\/localhost:49593\/mcp-manager\/callback\/srv-redirect/, 'the effective URI is shown');
+  assert.match(text(redirect), /Registration pending/);
+  const copy = nodes(redirect).find((node) => node.type === 'button' && text(node) === 'Copy');
+  assert.ok(copy, 'the URI can be copied');
+  assert.equal(typeof copy.props.onClick, 'function');
+
+  // Edit and Delete no longer sit on the card: they live behind the menu, so
+  // the action row cannot overflow.
+  const buttonLabels = nodes(card).filter((node) => node.type === 'button').map(text);
+  assert.ok(!buttonLabels.includes('Edit'), 'Edit moved into the menu');
+  assert.ok(!buttonLabels.includes('Delete'), 'Delete moved into the menu');
+  assert.ok(nodes(card).some((node) => typeof node.type === 'function' && node.props?.onEdit && node.props?.onDelete && node.props?.t), 'the actions live in a menu element');
+});
+
+it('opens the action menu with Edit and Delete and reports its state', async () => {
+  const server = { id: 'srv-menu', name: 'sentry', type: 'http', url: 'https://mcp.sentry.dev/mcp', authMode: 'oauth', status: 'connected', error: '', toolCount: 2, enabled: true };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-menu');
+  app.reset();
+  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  const menuEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.onEdit && node.props?.onDelete && node.props?.t);
+  assert.ok(menuEl, 'the menu element renders');
+
+  let edited = 0;
+  let deleted = 0;
+  const props = { ...menuEl.props, onEdit: () => { edited += 1; }, onDelete: () => { deleted += 1; } };
+  app.reset();
+  let menu = app.render(menuEl.type, props);
+  let toggle = nodes(menu).find((node) => node.props['aria-haspopup'] === 'menu');
+  assert.equal(toggle.props['aria-expanded'], false);
+  assert.equal(toggle.props['aria-label'], 'More actions');
+  assert.ok(!nodes(menu).some((node) => node.props.role === 'menuitem'), 'the menu is closed');
+
+  toggle.props.onClick();
+  menu = app.render(menuEl.type, props);
+  toggle = nodes(menu).find((node) => node.props['aria-haspopup'] === 'menu');
+  assert.equal(toggle.props['aria-expanded'], true);
+  const items = nodes(menu).filter((node) => node.props.role === 'menuitem');
+  assert.deepEqual(items.map(text), ['Edit', 'Delete']);
+
+  items[0].props.onClick();
+  assert.equal(edited, 1);
+  assert.equal(deleted, 0);
+  menu = app.render(menuEl.type, props);
+  assert.ok(!nodes(menu).some((node) => node.props.role === 'menuitem'), 'choosing an item closes the menu');
+  nodes(menu).find((node) => node.props['aria-haspopup'] === 'menu').props.onClick();
+  menu = app.render(menuEl.type, props);
+  nodes(menu).filter((node) => node.props.role === 'menuitem')[1].props.onClick();
+  assert.equal(deleted, 1);
+
+  // Escape closes it too; the wrapper carries an id so the document listener can
+  // tell a click inside this menu from a click outside it.
+  const wrap = app.render(menuEl.type, props);
+  nodes(wrap).find((node) => node.props['aria-haspopup'] === 'menu').props.onClick();
+  menu = app.render(menuEl.type, props);
+  const wrapNode = nodes(menu).find((node) => node.props.className === 'mm_menuWrap');
+  assert.ok(Number(wrapNode.props['data-menu-id']) >= 1, 'the menu carries its identity');
+  wrapNode.props.onKeyDown({ key: 'Escape' });
+  menu = app.render(menuEl.type, props);
+  assert.ok(!nodes(menu).some((node) => node.props.role === 'menuitem'), 'Escape closes the menu');
+});
+
+it('copies the effective redirect URI verbatim and shows the copied state', async () => {
+  const server = {
+    id: 'srv-copy', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp', authMode: 'oauth',
+    status: 'connected', error: '', toolCount: 1, enabled: true,
+    redirectUrl: 'http://localhost',
+    redirectUri: 'http://localhost:49593/mcp-manager/callback/srv-copy',
+    redirectDefaultUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-copy',
+  };
+  const created = [];
+  const commands = [];
+  const document = {
+    // A non-null style tag keeps the module from injecting one for this test.
+    querySelector: () => ({}),
+    createElement: () => {
+      const area = { style: {}, value: '', select() { this.selected = true; } };
+      created.push(area);
+      return area;
+    },
+    body: { appendChild() {}, removeChild() {} },
+    execCommand: (command) => { commands.push(command); return true; },
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  }, 'en', { document });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-copy');
+  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-copy');
+  app.reset();
+  let info = app.render(redirectEl.type, redirectEl.props);
+  const copy = nodes(info).find((node) => node.type === 'button' && text(node) === 'Copy');
+  copy.props.onClick();
+  info = app.render(redirectEl.type, redirectEl.props);
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0], 'copy');
+  assert.equal(created.length, 1, 'one textarea is used for the copy');
+  assert.equal(created[0].value, server.redirectUri, 'the clipboard payload is the effective URI');
+  assert.equal(created[0].selected, true, 'the textarea is selected before copying');
+  assert.equal(text(nodes(info).find((node) => node.type === 'button' && node.props.className === 'mm_btn')), 'Copied');
+});
+
+it('warns that a manual client id needs the provider allowlist update instead of re-registration', async () => {
+  const server = {
+    id: 'srv-manual', name: 'github', type: 'http', url: 'https://api.githubcopilot.com/mcp/', authMode: 'oauth',
+    status: 'connected', error: '', toolCount: 1, enabled: true,
+    clientId: 'Ov23li…', clientSecretEnv: '', clientName: '', scope: '',
+    redirectUrl: '', redirectUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-manual',
+    redirectDefaultUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-manual',
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-manual');
+  cardNode.props.onEdit();
+  tree = app.render();
+  const formEl = content(tree);
+  app.reset();
+  let form = app.render(formEl.type, formEl.props);
+  const input = nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'http://127.0.0.1:49593/mcp-manager/callback/srv-manual');
+  input.props.onChange({ target: { value: 'localhost:8080' } });
+  form = app.render(formEl.type, formEl.props);
+  assert.match(text(form), /A manual Client ID is never re-registered/);
+  assert.doesNotMatch(text(form), /registers the client again on the next Authenticate/);
+});
+
+it('edits the redirect URL against the effective default in the OAuth section', async () => {
+  const server = {
+    id: 'srv-edit', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp', authMode: 'oauth',
+    status: 'connected', error: '', toolCount: 1, enabled: true,
+    clientId: '', clientSecretEnv: '', clientName: '', scope: '',
+    redirectUrl: 'http://localhost', redirectUri: 'http://localhost:49593/mcp-manager/callback/srv-edit',
+    redirectDefaultUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-edit',
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-edit');
+  cardNode.props.onEdit();
+  tree = app.render();
+  const formEl = content(tree);
+  assert.ok(formEl, 'the edit form renders');
+  app.reset();
+  let form = app.render(formEl.type, formEl.props);
+
+  const redirectInput = nodes(form).find((node) => node.type === 'input' && node.props.value === 'http://localhost');
+  assert.ok(redirectInput, 'the stored override is prefilled');
+  // The placeholder is what would apply without the override, so "Use default"
+  // shows the address the plugin would really use.
+  assert.equal(redirectInput.props.placeholder, 'http://127.0.0.1:49593/mcp-manager/callback/srv-edit');
+  assert.match(text(form), /Only loopback hosts or an origin listed in config\.publicOrigins are accepted/);
+  assert.match(text(form), /Use default/);
+
+  // Editing the value announces that the next authentication re-registers.
+  redirectInput.props.onChange({ target: { value: 'localhost:8080' } });
+  form = app.render(formEl.type, formEl.props);
+  assert.match(text(form), /registers the client again on the next Authenticate/);
+  assert.equal(nodes(form).find((node) => node.type === 'input' && node.props.value === 'localhost:8080').props.value, 'localhost:8080');
+
+  // "Use default" clears it so the derived default applies again.
+  nodes(form).find((node) => node.type === 'button' && text(node) === 'Use default').props.onClick();
+  form = app.render(formEl.type, formEl.props);
+  assert.equal(nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'http://127.0.0.1:49593/mcp-manager/callback/srv-edit').props.value, '');
+  assert.doesNotMatch(text(form), /registers the client again on the next Authenticate/);
 });
