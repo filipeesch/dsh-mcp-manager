@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> 本地 **0.13.3 未发布候选**：累计改动、来源与验收边界见[发行说明](docs/release-v0.13.3.md)；它取代 [0.13.2](docs/release-v0.13.2.md)。
+> **0.18.0** 用插件自有的回环监听器取代了 GUI 承载的 OAuth 回调。破坏性变更与升级步骤见[发行说明](docs/release-v0.18.0.md)。
 
 **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的 MCP 服务器管理插件** —— 在 设置 → MCP 页签里添加 MCP 服务器（远程 HTTP 或本地 stdio 进程），HTTP 服务器可在 **浏览器里完成 OAuth 登录**，工具既可直接暴露，也可通过紧凑的按需 broker 调用。
 
@@ -10,9 +10,10 @@
 
 - **OAuth（授权码 + PKCE）**：规范化的元数据发现、RFC 7591 动态客户端注册、`refresh_token` 自动轮换、重启后自动重连——浏览器登录一次，之后一直可用。
   - **注册身份与密钥**（RFC 7591）：动态注册发送的 `client_name` 默认是 `dsh-mcp-manager-<服务器名>`，可按服务器配置（**Client 名称**），用于只接受指定名称的提供方。授权服务器公布 `client_secret_post` 时按机密客户端注册：签发的 `client_secret` 存入 0600 状态文件，并在换取 token 与刷新时发送（绝不出现在视图、API 响应或日志中）。对动态注册的客户端，修改 Client 名称或更换 GUI origin 会重新注册并丢弃旧客户端的 token；手动配置的 Client ID 不受影响。
-  - **客户端应用类型**遵循 MCP SEP-837：HTTP 回环回调（`localhost`、IPv4 回环地址或 `[::1]`）注册为 `native`，其他回调注册为 `web`，避免 OIDC 提供方把本地 GUI 默认视为 `web` 而拒绝其重定向。注册失败时显示提供方返回的 OAuth 错误码（若有），详细原因仍可在日志面板查看。提供方仍可能限制可接受的客户端或回调地址。
-  - **回调 origin**：直接访问接受 loopback `Host`（包括 `[::1]:端口`）；`localhost` 会规范化为 `127.0.0.1`，因此默认回调始终是 loopback 地址。反向代理通过 `publicOrigins` 配置显式白名单；只有一个 origin 时，它就是默认回调地址，无需转发头。配置多个 origin 时，完整的 `X-Forwarded-Proto` / `X-Forwarded-Host` 必须匹配白名单。无默认配置时拒绝外部 Host；格式非法的转发 Host 返回错误。回调页对消息进行 HTML 转义。
-  - **可自定义回调地址**（v0.17.0）：每个服务器可设置 **回调地址 Redirect URL**，替换该服务器所有 OAuth 流程的默认回调 origin——典型场景是授权服务器只接受 `localhost`，而 GUI 是从 `127.0.0.1` 打开的。可填 `host`、`host:port` 或 `scheme://host[:port]`，回调路径固定。省略端口时沿用 GUI 当前端口，因此重启换了端口也不会失效。只接受 loopback 主机或 `publicOrigins` 中列出的 origin（loopback 上使用 `https` 需要先列入 `publicOrigins`，因为回调接收端是明文 HTTP）。开始授权时解析出的 URI 会在换取 token 时原样复用。保存新地址不会让当前会话掉线：卡片上会显示实际生效的 URI（带复制按钮）和「待重新注册」提示，下次点「去认证」时才会按新的回调地址重新注册；手动配置的 Client ID 永远不会重新注册。详见[OAuth 回调地址](#oauth-回调地址)。
+  - **客户端应用类型**遵循 MCP SEP-837：回调现在始终是插件自己的回环监听器，因此动态注册总是 `native` 客户端，避免 OIDC 提供方把本地 GUI 默认视为 `web` 而拒绝其重定向。注册失败时显示提供方返回的 OAuth 错误码（若有），详细原因仍可在日志面板查看。提供方仍可能限制可接受的客户端或回调地址。
+  - **插件自有的回调监听器**（v0.18.0）：开始授权时插件在 loopback 上打开自己的 HTTP 监听器，没有待处理流程时关闭。默认回调地址是 `http://localhost:<端口>/callback`——URL 里既没有服务器 id，也不用 GUI 的端口，完全按 OAuth `state` 路由。地址和端口兼容的流程共用一个监听器（一个端口、多个路径），因此多个服务器、同一服务器的多个流程可以同时待处理而互不失效。监听器同时绑定 `127.0.0.1` 与 `::1`（系统支持时），IPv6 不可用时只用 IPv4。
+  - **全局回调设置**（v0.18.0）：**高级 → OAuth 回调** 可选 *自动*（默认：每次认证分配端口）或 *固定地址*（主机名、端口、路径，例如提供方要求预登记地址时的 `http://localhost:8765/callback`）。固定端口被占用会让本次认证失败并指出端口，绝不会静默换端口。该区块的标题行始终显示模式、当前监听器数量和错误标记。
+  - **回调地址覆盖**（v0.18.0）：每个服务器的 **回调地址 Redirect URI** 接受完整地址 `http://host[:port][/path]`，只接受回环字面量。全局为固定模式时，省略端口或路径的覆盖值会继承它们；自动模式下则分配端口并使用 `/callback`。开始授权时解析出的 URI 会在换取 token 时原样复用。保存新地址不会让当前会话掉线：卡片会显示实际生效的 URI（自动模式下显示上次认证实际使用的 URI，带复制按钮）和「待重新注册」提示，下次点「去认证」时才按新地址重新注册；手动配置的 Client ID 永远不会重新注册。详见[OAuth 回调](#oauth-回调)。
   - **RFC 8707 `resource`**：从受保护资源元数据读取，并传给授权、换取 token 和刷新请求；提供方不发布该值时不自行猜测。
   - **发现链**按 RFC 9728 → RFC 8414 顺序：MCP 端点 401 响应里的 `WWW-Authenticate` 指向受保护资源元数据，该文档再指出授权服务器，最后按 RFC 8414 的「路径插值」URL 读取授权服务器元数据（如 `https://github.com/.well-known/oauth-authorization-server/login/oauth`）。只有完全发现不到时才回退到猜测 `${origin}/oauth/*`，且日志里会说明这是猜的。
   - **手动客户端凭据**：适配不支持动态注册的授权服务器（GitHub 就不支持）——填 **Client ID**（你在提供方注册的应用），可选填 **Client Secret 环境变量名**（作为 `client_secret` 发送，密钥本身绝不落盘），以及 **Scopes**。若提供方只接受预先批准的 `client_name`，请填写 **Client 名称**，而不是让默认名称被拒绝。
@@ -50,54 +51,57 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 
 重启 `dsh --profile web` 并刷新页面。包内声明了 `dsh.bundle.patch`，插件自动激活——无需手动改 `cordis.patch.yml`。
 
-> MCP 服务器的 OAuth 提供方需要允许回环重定向（`http://127.0.0.1:<port>/mcp-manager/callback/<id>`）——DSH GUI 自身的 webserver 会接收授权码。origin 从浏览器实际地址动态派生，GUI 用任意 host/port 访问都可以。
+> MCP 服务器的 OAuth 提供方需要允许回环重定向（默认 `http://localhost:<端口>/callback`，或你配置的固定地址）。授权码由插件自己的监听器接收，与 GUI 的 host/port 无关。
 
 ## 使用
 
 1. 打开 DSH Web UI 的 **设置 → MCP**。
 2. **＋ 添加 MCP 服务器**（之后可用 **编辑** 修改）：
    - **作用域 Scope**：`user` = 全局服务器（所有工作区可用）；`workspace` = 绑定到某个工作区（配置写入该工作区的 `.dsh/dshmm/mcp.json`），从第二个下拉框选择工作区。
-   - **HTTP**：名称（决定 `mcp__<name>__*` 前缀）、URL、认证方式（OAuth、静态 token 或无鉴权）、可选标头（`headers` 直接值、`headerEnv` 值取自环境变量）。OAuth 模式下还可预注册客户端：**Client ID**、**Client Secret 环境变量名**、**Scopes**（均为可选；Scopes 留空则使用服务器公布的 scope）。**Client 名称**决定动态注册使用的 `client_name`（默认 `dsh-mcp-manager-<名称>`）——提供方只注册指定名称时需要填写。**回调地址 Redirect URL**（可选）可覆盖默认回调 origin，详见[OAuth 回调地址](#oauth-回调地址)。
+   - **HTTP**：名称（决定 `mcp__<name>__*` 前缀）、URL、认证方式（OAuth、静态 token 或无鉴权）、可选标头（`headers` 直接值、`headerEnv` 值取自环境变量）。OAuth 模式下还可预注册客户端：**Client ID**、**Client Secret 环境变量名**、**Scopes**（均为可选；Scopes 留空则使用服务器公布的 scope）。**Client 名称**决定动态注册使用的 `client_name`（默认 `dsh-mcp-manager-<名称>`）——提供方只注册指定名称时需要填写。**回调地址 Redirect URI**（可选）可覆盖默认回调，详见[OAuth 回调](#oauth-回调)。
    - **stdio**：名称、命令（如 `npx`）、参数（逐行填写）、环境变量（键/值逐行）、可选工作目录。
-3. OAuth 服务器：点 **去认证** → 浏览器打开登录页 → 同意授权后跳回，工具立即注册。若授权服务器公布了 `registration_endpoint`，插件会自行注册（RFC 7591），Client ID 可以留空；若没有——GitHub 的 `https://github.com/login/oauth` 就是常见情况——请在提供方注册一个 OAuth App，填入其 **Client ID**（若是机密客户端，再填**存放 secret 的环境变量名**），把 **Scopes** 设成 MCP 端点需要的范围（如 `repo read:org`），并在提供方处把服务器卡片上显示的重定向地址（标签 **回调地址**，带复制按钮；默认是 `http://127.0.0.1:<port>/mcp-manager/callback/<id>`，或该服务器配置的 Redirect URL）加进重定向白名单。不填 Client ID 时，失败会给出解释而不是一句 `HTTP 404`，**日志**面板会列出所有试过的 URL。
+3. OAuth 服务器：点 **去认证** → 浏览器打开登录页 → 同意授权后跳回，工具立即注册。若授权服务器公布了 `registration_endpoint`，插件会自行注册（RFC 7591），Client ID 可以留空；若没有——GitHub 的 `https://github.com/login/oauth` 就是常见情况——请在提供方注册一个 OAuth App，填入其 **Client ID**（若是机密客户端，再填**存放 secret 的环境变量名**），把 **Scopes** 设成 MCP 端点需要的范围（如 `repo read:org`），并在提供方处把服务器卡片上显示的重定向地址（标签 **回调地址**，带复制按钮；默认是 `http://localhost:<端口>/callback`，或「高级 → OAuth 回调」里配置的固定地址，或该服务器的 Redirect URI）加进重定向白名单。不填 Client ID 时，失败会给出解释而不是一句 `HTTP 404`，**日志**面板会列出所有试过的 URL。
 4. 静态 token 服务器：填写**存放 token 的环境变量名**（如 `MCP_BEARER_TOKEN`）——token 本身不写入磁盘；stdio 服务器保存后立即拉起本地进程并连接。
 5. 无鉴权服务器：选择 **无鉴权（服务器无需认证）**——插件不发送 `Authorization` 头，保存后直接连接；适用于不做认证的端点（例如本机 `http://127.0.0.1:9316/mcp`）。
 6. 可选：打开页面顶部的**按需 MCP 工具调用**。该开关对整个 profile 生效，重启后保持，并在现有会话的下一次请求开始生效。
 
-状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。操作：启用/禁用（开关）、去认证，以及收纳了「编辑」和「删除」的 `⋯` 菜单——动作区会换行、卡片网格会收成一列，而不是溢出卡片（结论来自 CSS，未在运行中的 profile 实测，见发布说明）。OAuth 卡片还会显示实际生效的 **回调地址** 并支持一键复制。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要，展开后可用 **日志 / Logs**。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话；若只想对某个工作区关闭，请用工作区视图里每行的「在此工作区启用」开关。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
+状态徽章：`已连接 (N 个工具)` / `待认证` / `认证中` / `错误` / `已禁用`。卡片默认折叠；展开后是操作区：带 `已启用`/`已禁用` 标签的启用开关、**日志**、**编辑**、**删除**（删除仍有确认），日志面板在该行下方展开。动作区会换行、卡片网格会收成一列，而不是溢出卡片（结论来自 CSS，未在运行中的 profile 实测，见发布说明）。需要认证时，状态徽章本身就是认证按钮——不再有单独的「去认证」按钮，已连接的服务器在卡片上没有重新认证入口。传输方式、端点和回调地址只出现在编辑表单里：表单显示实际生效的 **回调地址** 并支持一键复制（自动模式下则说明端口在认证时分配，并显示上次认证实际使用的地址）、待重新注册状态，以及手动配置的 Client ID 无法跟随变化之类的提示。服务器报错时，折叠状态下名称下方也会显示一行省略号截断的原因摘要。**禁用**会注销该服务器的全部工具并断开连接（配置与 OAuth token 保留）；**启用**时自动重连，无需重新认证。被禁用的服务器重启后保持休眠。该开关为全局生效：影响此 profile 下的所有会话；若只想对某个工作区关闭，请用工作区视图里每行的「在此工作区启用」开关。状态持久化在 `~/.dsh/mcp-manager.json`（服务器配置 + OAuth 客户端注册信息 + token；静态 token 仅以环境变量名引用，不落盘）。
 
-### OAuth 回调地址
+### OAuth 回调
 
-插件把 OAuth 回调拼成 `<origin>/mcp-manager/callback/<服务器 id>`。默认 origin 是访问 GUI 的
-loopback 地址（`localhost` 会规范化为 `127.0.0.1`）；配置了 `publicOrigins` 时则用该 origin。
-有些授权服务器只接受特定的 loopback 主机（例如只认 `localhost` 而不认 `127.0.0.1`），
-没有这个开关就无法完成认证。
+插件在自己打开的监听器上接收授权码：
 
-在添加/编辑表单的 OAuth 区块填写 **回调地址 Redirect URL**（工作区服务器写入
-`<workspace>/.dsh/dshmm/mcp.json` 的 `redirectUrl`），即可替换该服务器的回调 origin：
+- **自动**模式（默认）下是 `http://localhost:<端口>/callback`：端口在开始认证时分配，认证结束即释放。
+- **固定地址**模式下是 `http://<主机名>:<端口><路径>`，在 **设置 → MCP → 高级 → OAuth 回调** 里配置一次。提供方要求预登记回调地址时使用它。
+- 添加/编辑表单 OAuth 区块里的每服务器覆盖值（工作区服务器写入 `<workspace>/.dsh/dshmm/mcp.json` 的 `redirectUrl`）会同时覆盖上面两者。
 
 | 填写值 | 实际回调地址 |
 |---|---|
-| `localhost` | `http://localhost:<当前 GUI 端口>/mcp-manager/callback/<id>` |
-| `localhost:8080` | `http://localhost:8080/mcp-manager/callback/<id>` |
-| `https://relay.example.com` | `https://relay.example.com/mcp-manager/callback/<id>` |
+| （留空，自动模式） | `http://localhost:<分配端口>/callback` |
+| （留空，固定 `localhost:8765`） | `http://localhost:8765/callback` |
+| `localhost` | 固定模式：`http://localhost:<固定端口><固定路径>`；自动模式：分配端口 + `/callback` |
+| `http://localhost:8080/gh-callback` | `http://localhost:8080/gh-callback` |
+| `127.0.0.1` | `http://127.0.0.1:<固定或分配端口>/callback` |
 
-- 回调**路径**始终由插件决定；带路径、查询串、fragment 或凭据的值会被拒绝。
-- 省略端口时沿用本机访问 GUI 所用的端口（回环请求取 `Host` 的端口，经代理转发时取连接的监听端口），
-  所以即使 DSH 重启后换了端口，`localhost` 依然有效；显式填写的端口按原样使用——它必须真的能把请求
-  转发到 GUI（反向代理或端口映射），否则浏览器无法把授权码送回来。
-- 允许的主机：loopback（`localhost`、IPv4 回环段 `127.0.0.0/8` 或 `::1`）或 `config.publicOrigins` 中列出的 origin。
-  loopback 上使用 `https` 会被拒绝，因为插件的回调接收端是明文 HTTP。
+- 只接受 **loopback** 主机（`localhost`、IPv4 回环段 `127.0.0.0/8`、`::1`）；监听器绑定不到其他地址，
+  协议固定为 `http`，因为接收端是明文 HTTP。
+- **显式填写的端口按原样使用**，绝不会被静默替换：端口被占用时认证会失败并指出该端口。你之前在提供方
+  登记的回调地址只有在与插件实际呈现的地址一致时才有意义。
+- **自动**模式下每次认证的地址都会变化，因此手动配置的 Client ID（永远不会重新注册）需要固定模式或
+  每服务器覆盖值——卡片会对这种情况给出提示。
 - 解析出的 URI 在授权开始时固定，并在换取 token 时原样复用，因此即使回调经由代理或其他主机
   到达，兑换也能成功。
 - 保存新地址不会中断当前会话：卡片显示实际生效的 URI、复制按钮和「待重新注册」提示；下次
-  **去认证** 时才会按新地址重新注册（旧客户端的 token 在那时才丢弃，而不是保存时）。手动配置的
-  Client ID 永远不会重新注册——请自行在提供方处更新白名单。
+  **去认证** 时才会按新地址重新注册（旧客户端的 token 在那时才丢弃，而不是保存时）。
 
-**从 0.16.x 升级：** 以 `localhost` 访问 GUI 的请求，现在默认得到回环 IP
-（`http://127.0.0.1:<port>/...`），不再得到 `http://localhost:<port>/...`。如果你的提供方只把
-`localhost` 列入白名单，升级后请把 **回调地址 Redirect URL** 设为 `localhost`（或 `localhost:<port>`）。
-现有注册会继续用于刷新，直到你再次认证；升级后的第一次认证会用新地址重新注册客户端。
+**从 0.17.x 升级：**
+
+- 回调路径从 `/mcp-manager/callback/<服务器 id>` 变为 `/callback`（或你配置的路径），端口也不再是
+  GUI 的端口。凡是你手工填入过旧地址的提供方，都需要重新登记新地址。
+- `config.publicOrigins` 不再参与 OAuth。部署在反向代理后面的实例必须自行暴露回调监听器（例如固定
+  一个端口并在代理里转发），因为插件只绑定 loopback。
+- 已保存的非 loopback `redirectUrl`（例如 `https://relay.example.com`）**不会**被改写：下次认证会
+  失败并指出该值，卡片也会标记出来。请改成回环地址或清空。已保存的 token 会继续刷新，直到你再次认证。
 
 ### 工具调用超时
 

@@ -63,11 +63,14 @@ async function request(handler, method, path, body) {
 it('settings omits language, rejects the removed route, and preserves legacy state', async () => {
   let handler = makeCtx().routes[0].handler;
   const get = () => request(handler, 'GET', '/mcp-manager/api/settings');
-  assert.deepEqual((await get()).json, { onDemandToolInjection: false });
+  // The payload also carries the OAuth callback configuration and its live
+  // status; this test only pins the on-demand flag and the removed language key.
+  assert.equal((await get()).json.onDemandToolInjection, false);
+  assert.equal((await get()).json.language, undefined);
   mkdirSync(join(scratchHome, '.dsh'), { recursive: true });
   writeFileSync(statePath, JSON.stringify({ servers: [], language: 'zh' }));
   handler = makeCtx().routes[0].handler;
-  assert.deepEqual((await get()).json, { onDemandToolInjection: false });
+  assert.equal((await get()).json.onDemandToolInjection, false);
   for (const body of [{ language: 'en' }, { language: 'zh' }, {}, null]) {
     assert.equal((await request(handler, 'POST', '/mcp-manager/api/settings/language', body)).code, 404);
   }
@@ -75,5 +78,5 @@ it('settings omits language, rejects the removed route, and preserves legacy sta
   assert.equal((await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true })).code, 200);
   assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).language, 'zh');
   handler = makeCtx().routes[0].handler;
-  assert.deepEqual((await get()).json, { onDemandToolInjection: true });
+  assert.equal((await get()).json.onDemandToolInjection, true);
 });

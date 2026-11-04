@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-> Local **0.13.3 unreleased candidate**: see the [release notes](docs/release-v0.13.3.md) for cumulative changes, provenance and verification limits. It supersedes [0.13.2](docs/release-v0.13.2.md).
+> **0.18.0** replaces the GUI-hosted OAuth callback with plugin-owned loopback listeners. See the [release notes](docs/release-v0.18.0.md) for the breaking changes and the upgrade steps.
 
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
 
@@ -10,24 +10,27 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 
 - **OAuth (authorization code + PKCE)** with spec-compliant discovery, RFC 7591 dynamic client registration, `refresh_token` rotation, and auto-reconnect across restarts — one browser login, then it keeps working.
   - **Registration identity and secret** (RFC 7591): the `client_name` sent to the registration endpoint is `dsh-mcp-manager-<server>` by default and configurable per server (**Client name**) for providers that gate registration on an exact name. When the authorization server advertises `client_secret_post`, the client registers confidentially: the issued `client_secret` is stored in the 0600 state file and sent on token exchange and refresh (never in a view, response or log). For a dynamically registered client, a changed client name — or a new GUI origin — re-registers and drops the old client's tokens; a manually configured Client ID is unaffected.
-  - **Client application type** follows MCP SEP-837: HTTP loopback callbacks (`localhost`, IPv4 loopback, or `[::1]`) register as `native`; other callbacks register as `web`. This avoids OIDC providers defaulting a local GUI to `web` and rejecting its redirect. Registration failures show the provider's OAuth error code when available; the Logs panel retains the detailed reason. Providers may still restrict which clients or redirects they accept.
-  - **Callback origin** accepts direct loopback `Host` values (including `[::1]:port`); a `localhost`
-    request is normalized to `127.0.0.1`, so the derived default always names a loopback address. Configure
-    `publicOrigins` for a reverse proxy: one configured origin is the default callback even without
-    forwarded headers; with multiple origins, a complete `X-Forwarded-Proto`/`X-Forwarded-Host` pair
-    must match the allowlist. A foreign direct Host is rejected when no default is configured.
-    Malformed forwarded host values are rejected. Callback messages are HTML-escaped.
-  - **Redirect URL override** (v0.17.0): a per-server **Redirect URL** replaces that default callback
-    origin for every flow of that server — the case it exists for is an authorization server that only
-    accepts `localhost` while the GUI is reached through `127.0.0.1`. It takes `host`, `host:port` or
-    `scheme://host[:port]`; the callback path is fixed. An omitted port follows the port the GUI is
-    reached on locally (the loopback `Host` port, or the listening port behind a proxy), so the value
-    survives a restart that picks a different one. Only a loopback host or an origin listed
-    in `publicOrigins` is accepted (`https` on loopback needs `publicOrigins`, because the receiver is
-    plain HTTP). The URI resolved when an authorization starts is replayed verbatim at the token
-    exchange. Saving a new value never drops the current session: the card shows the effective URI with
-    a copy action plus a *registration pending* note, and the next Authenticate re-registers the client
-    for the new exact redirect. See [OAuth redirect URL](#oauth-redirect-url).
+  - **Client application type** follows MCP SEP-837: the callback is now always a loopback listener, so a dynamic registration is always a `native` client. This avoids OIDC providers defaulting a local GUI to `web` and rejecting its redirect. Registration failures show the provider's OAuth error code when available; the Logs panel retains the detailed reason. Providers may still restrict which clients or redirects they accept.
+  - **Plugin-owned callback listener** (v0.18.0): the plugin opens its own HTTP listener on loopback
+    when an authorization starts and closes it when no flow is pending. The callback URL is
+    `http://localhost:<port>/callback` by default — no server id, no GUI port, and routing by the OAuth
+    `state` alone. Compatible flows share one listener (one port, several paths), so several servers and
+    several flows of the same server can be pending at once without invalidating each other. Listeners
+    bind `127.0.0.1` and `::1` when both are available; the IPv4 socket alone is used when IPv6 is
+    unavailable.
+  - **Global callback settings** (v0.18.0): **Advanced → OAuth callback** chooses *automatic* (the
+    default: port allocated per authentication) or *fixed* (hostname, port and path, e.g.
+    `http://localhost:8765/callback` for a provider that requires a pre-registered redirect). A busy
+    fixed port fails the attempt with a message naming the port — it is never silently replaced. The
+    section header always shows the mode, the number of running listeners and an error indicator.
+  - **Redirect URI override** (v0.18.0): a per-server **Redirect URI** accepts a complete
+    `http://host[:port][/path]`. Only loopback literals are accepted. With a fixed global configuration,
+    an override that omits the port or path inherits them; with automatic mode it allocates a port and
+    uses `/callback`. The URI resolved when an authorization starts is replayed verbatim at the token
+    exchange. Saving a new value never drops the current session: the card shows the effective URI (or,
+    in automatic mode, the URI the last authentication used) with a copy action plus a *registration
+    pending* note, and the next Authenticate re-registers the client for the new exact redirect. See
+    [OAuth callback](#oauth-callback).
   - **Discovery** follows RFC 9728 → RFC 8414: the MCP endpoint's 401 `WWW-Authenticate` header names its protected-resource metadata, that document names the authorization server, and the authorization server's metadata is read from the RFC 8414 path-inserted URL (e.g. `https://github.com/.well-known/oauth-authorization-server/login/oauth`). Only when nothing is discoverable does it fall back to guessing `${origin}/oauth/*`, and the attempt log says so.
   - **RFC 8707 `resource`** taken from the protected-resource document and sent on authorize, token
     exchange and refresh. A server that binds tokens to an audience (Kontrcheck's connector does)
@@ -68,7 +71,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-mana
 
 Then restart `dsh --profile web` and refresh the page. The package declares a `dsh.bundle.patch`, so the plugin activates automatically — no manual `cordis.patch.yml` editing.
 
-> The MCP server's OAuth provider must allow a loopback redirect (`http://127.0.0.1:<port>/mcp-manager/callback/<id>`), which is where the DSH GUI webserver receives the code. The origin is derived from your browser's own address, so any host/port the GUI is served on works.
+> The MCP server's OAuth provider must allow a loopback redirect (`http://localhost:<port>/callback` by default, or the fixed address you configure). The plugin receives the code on its own listener, so the GUI's host and port are irrelevant.
 
 ## Usage
 
@@ -77,51 +80,57 @@ Then restart `dsh --profile web` and refresh the page. The package declares a `d
    - **Scope (作用域)**: `user` — a global server available in every workspace; or `workspace` — a server bound to one workspace (its config lives in that workspace's `.dsh/dshmm/mcp.json`). Pick the workspace from the second dropdown.
    - **HTTP**: name (becomes the `mcp__<name>__*` prefix), URL, auth mode (OAuth, static token, or no auth), and optional headers (`headers` direct values, `headerEnv` values read from env vars). In OAuth mode you can additionally pre-register the client: **Client ID**, **Client secret environment variable**, and **Scopes** (all optional; leave Scopes empty to use what the server advertises). **Client name** sets the `client_name` used for dynamic registration (default `dsh-mcp-manager-<name>`) — needed when the provider only registers pre-approved names. **Redirect URL** (optional) overrides the callback origin; see [OAuth redirect URL](#oauth-redirect-url).
    - **stdio**: name, command (e.g. `npx`), args (one per row), env vars (key/value rows), and optional working directory.
-3. OAuth servers: click **去认证 (Authenticate)** → the browser opens the server's login page → after consent you are redirected back and the tools are registered immediately. If the authorization server advertises a `registration_endpoint` the plugin registers itself (RFC 7591) and you can leave Client ID empty. If it does not — GitHub's `https://github.com/login/oauth` is the common case — register an OAuth App with the provider, paste its **Client ID** (and the **name of the environment variable** holding its secret, if it is a confidential client), set **Scopes** to what the MCP endpoint needs (e.g. `repo read:org`), and whitelist the redirect URI that the server card shows (label **Redirect URI**, with a copy button) — `http://127.0.0.1:<port>/mcp-manager/callback/<id>` by default, or the server's Redirect URL override — as the redirect URI there. Without a Client ID the attempt fails with an explanation rather than a bare `HTTP 404`, and the **Logs** panel lists every URL that was tried.
+3. OAuth servers: click **去认证 (Authenticate)** → the browser opens the server's login page → after consent you are redirected back and the tools are registered immediately. If the authorization server advertises a `registration_endpoint` the plugin registers itself (RFC 7591) and you can leave Client ID empty. If it does not — GitHub's `https://github.com/login/oauth` is the common case — register an OAuth App with the provider, paste its **Client ID** (and the **name of the environment variable** holding its secret, if it is a confidential client), set **Scopes** to what the MCP endpoint needs (e.g. `repo read:org`), and whitelist the redirect URI that the server card shows (label **Redirect URI**, with a copy button) — `http://localhost:<port>/callback` by default, the fixed configuration in Advanced → OAuth callback, or the server's Redirect URI override — as the redirect URI there. Without a Client ID the attempt fails with an explanation rather than a bare `HTTP 404`, and the **Logs** panel lists every URL that was tried.
 4. Static-token servers: enter the **name of an environment variable** that holds the token (e.g. `MCP_BEARER_TOKEN`) — the token itself is never written to disk; stdio servers spawn and connect immediately on save.
 5. No-auth servers: pick **No auth (server needs no credentials)** — the plugin sends no `Authorization` header and connects on save. Use it for an endpoint that authenticates nothing (for example a local `http://127.0.0.1:9316/mcp`).
 6. Optional: turn on **On-demand MCP tool calls** at the top of the page. The setting is profile-wide, persists across restarts, and affects existing sessions on their next request.
 
-Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Actions: enable/disable (switch), authenticate, and a `⋯` menu holding Edit and Delete. The action row wraps and the card grid collapses to one column instead of overflowing the card (measured through the CSS, not in a running profile — see the release notes). An OAuth card shows its effective **Redirect URI** with a copy action. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed, and the expanded card offers **日志 / Logs**. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile; the workspace view's per-row switch turns a server off for one workspace only. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
+Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Cards start collapsed; expanding one reveals its controls: the enable switch labelled `Enabled`/`Disabled`, **Logs**, **Edit** and **Delete** (Delete keeps a confirmation), with the log panel opening below that row. The action row wraps and the card grid collapses to one column instead of overflowing the card (measured through the CSS, not in a running profile — see the release notes). When a server needs authentication the status badge itself is the authentication action — there is no separate Authenticate button, and a connected server has no re-auth control on the card. Transport, endpoint and redirect details live in the edit form: it shows the effective **Redirect URI** with a copy action (or, in automatic mode, that the port is assigned at authentication plus the URI the last authentication used), the pending-registration state and warnings such as a manual Client ID that cannot follow a changing URI. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile; the workspace view's per-row switch turns a server off for one workspace only. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
 
-### OAuth redirect URL
+### OAuth callback
 
-The plugin builds the OAuth callback as `<origin>/mcp-manager/callback/<server-id>`. By default the
-origin is the loopback address the GUI is reached on (`localhost` is normalized to `127.0.0.1`), or the
-configured `publicOrigins` origin when there is one. Some authorization servers only accept a specific
-loopback host — `localhost` instead of `127.0.0.1`, for example — and those servers cannot be
-authenticated without a way to say so.
+The plugin receives the authorization code on a listener it owns:
 
-Set **Redirect URL** in the OAuth section of the add/edit form (or `redirectUrl` in
-`<workspace>/.dsh/dshmm/mcp.json` for a workspace server) to replace the origin for that server:
+- `http://localhost:<port>/callback` in **automatic** mode (the default): the port is allocated when an
+  authentication starts and released when it ends.
+- `http://<hostname>:<port><path>` in **fixed** mode, configured once in **Advanced → OAuth callback**
+  (Settings → MCP). Use it when the provider requires a pre-registered redirect URI.
+- A per-server override in the OAuth section of the add/edit form (or `redirectUrl` in
+  `<workspace>/.dsh/dshmm/mcp.json` for a workspace server) replaces both for that server.
 
 | Value | Effective redirect |
 |---|---|
-| `localhost` | `http://localhost:<current GUI port>/mcp-manager/callback/<id>` |
-| `localhost:8080` | `http://localhost:8080/mcp-manager/callback/<id>` |
-| `https://relay.example.com` | `https://relay.example.com/mcp-manager/callback/<id>` |
+| (none, automatic) | `http://localhost:<allocated port>/callback` |
+| (none, fixed `localhost:8765`) | `http://localhost:8765/callback` |
+| `localhost` | fixed mode: `http://localhost:<fixed port>/<fixed path>`; automatic: the allocated port with `/callback` |
+| `http://localhost:8080/gh-callback` | `http://localhost:8080/gh-callback` |
+| `127.0.0.1` | `http://127.0.0.1:<fixed or allocated port>/callback` |
 
-- The callback **path** is always the plugin's; a value carrying a path, query, fragment or credentials
-  is rejected.
-- An omitted port inherits the port the GUI is reached on locally — the `Host` port for a loopback
-  request, or the listening port when a proxy forwarded the request — so `localhost` keeps working when
-  DSH restarts on another port. An explicit port is used verbatim — it must be something that actually
-  forwards to the GUI (a reverse proxy or a port mapping), otherwise the browser cannot deliver the code.
-- Accepted hosts: loopback (`localhost`, the IPv4 loopback range `127.0.0.0/8`, or `::1`) or an origin listed in
-  `config.publicOrigins`. `https` on a loopback host is rejected unless it is listed there, because the
-  plugin's callback receiver is plain HTTP.
+- Only **loopback** hosts are accepted (`localhost`, the IPv4 loopback range `127.0.0.0/8`, `::1`); the
+  listener cannot bind anything else, and the scheme is always `http` because the receiver is plain HTTP.
+- An **explicit port is used verbatim** and never silently replaced: if it is busy, authentication fails
+  with a message naming the port. A callback URI you once registered at the provider stays valid only if
+  it matches what the plugin presents.
+- In **automatic** mode the URI changes per authentication, so a manually configured Client ID (which is
+  never re-registered) needs a fixed callback configuration or a per-server override — the card warns
+  about that case.
 - The resolved URI is fixed when the authorization starts and replayed at the token exchange, so a
   callback that arrives through a proxy or another host still exchanges correctly.
 - Saving a new value keeps the current session: the card shows the effective URI, a copy action and a
   *registration pending* note, and the next **Authenticate** re-registers a dynamically registered
-  client for the new exact redirect (the previous client's tokens are discarded then, not on save). A
-  manually configured Client ID is never re-registered — whitelist the new URI at the provider yourself.
+  client for the new exact redirect (the previous client's tokens are discarded then, not on save).
 
-**Upgrading from 0.16.x:** a request addressed to `localhost` now yields the loopback IP
-(`http://127.0.0.1:<port>/...`) instead of `http://localhost:<port>/...`. If your provider allowlists
-only `localhost`, set **Redirect URL** to `localhost` (or `localhost:<port>`) after upgrading. The
-existing registration keeps refreshing until you authenticate again; the first authentication after
-the change registers the client again for the new URI.
+**Upgrading from 0.17.x:**
+
+- The callback path changed from `/mcp-manager/callback/<server-id>` to `/callback` (or your configured
+  path), and the port is no longer the GUI's. Re-register the new URI at any provider where you entered
+  the old one by hand.
+- `config.publicOrigins` no longer participates in OAuth. A deployment behind a reverse proxy must
+  expose the callback listener (for example by pinning a fixed port and forwarding it), because the
+  plugin binds loopback only.
+- A stored non-loopback `redirectUrl` (such as `https://relay.example.com`) is **not** rewritten: the next
+  authentication fails with an error naming the value, and the card flags it. Correct it to a loopback
+  address or clear it. Stored tokens keep refreshing until you authenticate again.
 
 ### Tool-call timeouts
 

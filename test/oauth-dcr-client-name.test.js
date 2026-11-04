@@ -32,6 +32,7 @@ mkdirSync(join(scratchHome, '.dsh'), { recursive: true });
 const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
 
 const { apply } = await import('../lib/index.js');
+const { deliverCallback, freePort } = await import('./helpers/oauth-harness.js');
 
 const testDisposers = [];
 beforeEach(() => writeFileSync(statePath, JSON.stringify({ servers: [] })));
@@ -222,7 +223,6 @@ function startStub({
 }
 
 const authorizeUrlOf = (auth) => new URL(auth.json.authorizeUrl);
-const callbackPath = (id, authorize) => `/mcp-manager/callback/${id}?code=synthetic-code&state=${authorize.searchParams.get('state')}`;
 
 it('requests no confidential-client auth and keeps the default client_name for a public client', async (t) => {
   const stub = await startStub();
@@ -240,7 +240,7 @@ it('requests no confidential-client auth and keeps the default client_name for a
   assert.equal(stub.registrations[0].client_name, 'dsh-mcp-manager-public-dcr');
   assert.equal(stub.registrations[0].token_endpoint_auth_method, 'none', 'no advertised confidential method means a public client');
 
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
   assert.equal(stub.forms[0].get('client_secret'), null, 'a public client must not send a secret');
 
@@ -289,7 +289,7 @@ it('registers under a configured client_name and uses the issued secret at excha
   assert.equal(stub.registrations[1].client_name, 'acme-dsh-client');
   assert.equal(stub.registrations[1].token_endpoint_auth_method, 'client_secret_post');
 
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
   assert.equal(stub.forms[0].get('client_secret'), 'dcr-secret-2', 'exchange must send the issued secret');
 
@@ -332,7 +332,7 @@ it('lets a configured client-secret environment variable win over the stored reg
       oauth: {
         clientId: 'dcr-client-1',
         clientName: 'dsh-mcp-manager-seeded-secret',
-        redirect: `http://127.0.0.1:3080/mcp-manager/callback/${id}`,
+        redirect: 'http://127.0.0.1:3080/callback',
         clientSecret: 'stored-registration-secret',
         tokens: { access_token: 'spent-access', refresh_token: 'refresh-spent', expires_at: 0 },
       },
@@ -366,7 +366,7 @@ it('re-registers when client_name changes and keeps the registration when it doe
   assert.equal(auth.code, 200, auth.text);
   assert.equal(stub.registrations.length, 1);
   assert.equal(stub.registrations[0].client_name, 'client-one');
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
 
   // An unrelated save must keep the registration and its token pair.
@@ -393,7 +393,7 @@ it('re-registers when client_name changes and keeps the registration when it doe
   assert.equal(reauth.code, 200, reauth.text);
   assert.equal(stub.registrations.length, 2);
   assert.equal(stub.registrations[1].client_name, 'client-two');
-  const second = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(reauth)));
+  const second = await deliverCallback(reauth.json.authorizeUrl);
   assert.match(second.text, /Authorized/);
   const exchange = stub.forms.find((form) => form.get('grant_type') === 'authorization_code' && form.get('client_id') === 'dcr-client-2');
   assert.ok(exchange);
@@ -423,7 +423,7 @@ it('drops the cached registration when a rename changes the derived default clie
   assert.equal(created.code, 201, created.text);
   const id = created.json.server.id;
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
   assert.equal(stub.registrations[0].client_name, 'dsh-mcp-manager-original-name');
   assert.equal(state().servers.find((server) => server.id === id).oauth.clientSecret, 'dcr-secret-1');
@@ -446,7 +446,7 @@ it('never retains a provider error body that echoes the client secret', async (t
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 200, auth.text);
 
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Token exchange failed/);
   assert.ok(!callback.text.includes('dcr-secret-1'), 'the callback page must not print the secret a provider echoed');
   const logs = await request(handler, 'GET', `/mcp-manager/api/servers/${id}/logs`);
@@ -472,7 +472,7 @@ it('does not present a secret issued by a public-client registration', async (t)
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 200, auth.text);
   assert.equal(stub.registrations[0].token_endpoint_auth_method, 'none');
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
   assert.equal(stub.forms[0].get('client_secret'), null, 'a public-client registration must not present a secret');
 
@@ -533,7 +533,7 @@ it('redacts a long provider error body before truncating it', async (t) => {
 
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 200, auth.text);
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Token exchange failed/);
 
   const secret = state().servers.find((server) => server.id === id).oauth.clientSecret;
@@ -577,6 +577,10 @@ it('reuses a registration made before oauth.clientName was recorded', async (t) 
   const stub = await startStub();
   t.after(() => stub.close());
   const id = 'legacy-registration';
+  // The stored registration must match the URI this authorization resolves, so
+  // pin one: an automatic port changes per flow by design.
+  const port = await freePort();
+  const redirect = `http://127.0.0.1:${port}/callback`;
   writeFileSync(statePath, JSON.stringify({
     servers: [{
       id,
@@ -584,9 +588,10 @@ it('reuses a registration made before oauth.clientName was recorded', async (t) 
       type: 'http',
       url: stub.mcpUrl,
       authMode: 'oauth',
+      redirectUrl: `http://127.0.0.1:${port}`,
       oauth: {
         clientId: 'dcr-client-legacy',
-        redirect: `http://127.0.0.1:3080/mcp-manager/callback/${id}`,
+        redirect,
         tokens: { access_token: 'legacy-access', refresh_token: 'legacy-refresh', expires_at: Date.now() + 3600000 },
       },
     }],
@@ -753,7 +758,7 @@ it('re-registers on a new GUI origin and drops the token pair that belonged to t
   assert.equal(created.code, 201, created.text);
   const id = created.json.server.id;
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
-  const callback = await request(handler, 'GET', callbackPath(id, authorizeUrlOf(auth)));
+  const callback = await deliverCallback(auth.json.authorizeUrl);
   assert.match(callback.text, /Authorized/);
   assert.ok(state().servers.find((server) => server.id === id).oauth.tokens);
 

@@ -27,6 +27,7 @@ const statePath = join(scratchHome, '.dsh', 'mcp-manager.json');
 const fixture = fileURLToPath(new URL('../test-fixtures/restart-connect.mjs', import.meta.url));
 
 const { apply } = await import('../lib/index.js');
+const { canBindIPv6Loopback, deliverCallback, redirectOf } = await import('./helpers/oauth-harness.js');
 
 const testDisposers = [];
 beforeEach(() => writeFileSync(statePath, JSON.stringify({ servers: [] })));
@@ -203,9 +204,8 @@ async function authorize(handler, id) {
   return new URL(auth.json.authorizeUrl);
 }
 
-async function complete(handler, id, authorizeUrl) {
-  const flowState = new URL(authorizeUrl).searchParams.get('state');
-  const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?code=stub-code&state=${flowState}`);
+async function complete(_handler, _id, authorizeUrl) {
+  const callback = await deliverCallback(String(authorizeUrl));
   assert.match(callback.text, /Authorized/, callback.text);
   return callback;
 }
@@ -222,9 +222,10 @@ it('sends the RFC 8707 resource from the protected-resource document at every st
 
   const authorizeUrl = await authorize(handler, id);
   assert.equal(authorizeUrl.searchParams.get('resource'), stub.resource, 'authorize must carry the discovered resource');
-  assert.equal(authorizeUrl.searchParams.get('redirect_uri'), `http://127.0.0.1:3080/mcp-manager/callback/${id}`);
+  const redirect = redirectOf(authorizeUrl.toString());
+  assert.match(redirect, /^http:\/\/localhost:\d+\/callback$/);
   assert.equal(authorizeUrl.searchParams.get('code_challenge_method'), 'S256');
-  assert.deepEqual(stub.registerBodies[0].redirect_uris, [`http://127.0.0.1:3080/mcp-manager/callback/${id}`]);
+  assert.deepEqual(stub.registerBodies[0].redirect_uris, [redirect]);
 
   assert.equal(stub.tokenForms.length, 0, 'registration alone issues no token');
   await complete(handler, id, authorizeUrl);
@@ -336,100 +337,42 @@ it('leaves the flow unchanged when the resource document publishes none', async 
   await stub.close();
 });
 
-it('honours a forwarded origin only when it is explicitly allowed', async (t) => {
+it('ignores forwarded headers and a legacy public origin', async (t) => {
   const stub = await startStub();
   t.after(() => stub.close());
   const { handler } = makeCtx({ publicOrigins: ['https://harness.example.com'] });
   const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'proxy', type: 'http', url: stub.mcpUrl, authMode: 'oauth' });
   const id = created.json.server.id;
 
-  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
+  const forwarded = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
     'x-forwarded-proto': 'https',
     'x-forwarded-host': 'harness.example.com',
   });
-  assert.equal(auth.code, 200, auth.text);
-  assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('redirect_uri'), `https://harness.example.com/mcp-manager/callback/${id}`);
+  assert.equal(forwarded.code, 200, forwarded.text);
+  assert.match(redirectOf(forwarded.json.authorizeUrl), /^http:\/\/localhost:\d+\/callback$/);
 
-  const malformed = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
-    'x-forwarded-proto': 'https',
-    'x-forwarded-host': 'evil.example.com/path',
-  });
-  assert.equal(malformed.code, 400, malformed.text);
-  assert.match(malformed.json.error, /invalid request host/);
-
-  // A well-formed but unlisted host is a redirect attempt, not a proxy hop.
-  const unlisted = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
-    'x-forwarded-proto': 'https',
-    'x-forwarded-host': 'evil.example.com',
-  });
-  assert.equal(unlisted.code, 200, unlisted.text);
-  assert.equal(new URL(unlisted.json.authorizeUrl).searchParams.get('redirect_uri'),
-    `https://harness.example.com/mcp-manager/callback/${id}`,
-    'an unlisted forwarded host is ignored, and the configured origin names the callback');
+  // A foreign Host no longer matters either: the callback does not derive from
+  // the request at all.
+  const foreign = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'evil.example.com' });
+  assert.equal(foreign.code, 200, foreign.text);
+  const redirect = redirectOf(foreign.json.authorizeUrl);
+  assert.match(redirect, /^http:\/\/localhost:\d+\/callback$/);
+  assert.ok(!redirect.includes('evil.example.com'), 'a request Host must never name the callback');
   await stub.close();
 });
 
-it('ignores forwarded headers entirely when no public origin is configured', async (t) => {
-  const stub = await startStub();
-  t.after(() => stub.close());
-  const { handler } = makeCtx();
-  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'noproxy', type: 'http', url: stub.mcpUrl, authMode: 'oauth' });
-  const id = created.json.server.id;
-
-  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
-    'x-forwarded-proto': 'https',
-    'x-forwarded-host': 'harness.roadstash.com',
-  });
-  assert.equal(auth.code, 200, auth.text);
-  assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('redirect_uri'),
-    `http://127.0.0.1:3080/mcp-manager/callback/${id}`,
-    'without an explicit allowlist the forwarded pair must not be trusted');
-  await stub.close();
-});
-
-it('keeps the configured https callback when the proxy sends no X-Forwarded-Proto', async (t) => {
+it('registers the loopback callback even behind a proxy', async (t) => {
   const stub = await startStub();
   t.after(() => stub.close());
   const { handler } = makeCtx({ publicOrigins: ['https://harness.example.com'] });
   const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'plain-http', type: 'http', url: stub.mcpUrl, authMode: 'oauth' });
   const id = created.json.server.id;
 
-  // Browsers behind Caddy reach the GUI as plain HTTP on the loopback hop; the
-  // forwarded proto may be missing entirely. The configured public origin is the
-  // only external address, so it must win instead of the http Host.
-  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
-    host: 'harness.example.com',
-  });
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'harness.example.com' });
   assert.equal(auth.code, 200, auth.text);
-  assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('redirect_uri'),
-    `https://harness.example.com/mcp-manager/callback/${id}`);
-  const register = stub.registerBodies.at(-1);
-  assert.deepEqual(register.redirect_uris, [`https://harness.example.com/mcp-manager/callback/${id}`],
-    'the dynamic registration must declare the https callback');
-  await stub.close();
-});
-
-it('never turns a foreign Host into the external callback', async (t) => {
-  const stub = await startStub();
-  t.after(() => stub.close());
-  const { handler } = makeCtx({ publicOrigins: ['https://harness.example.com'] });
-  const created = await request(handler, 'POST', '/mcp-manager/api/servers', { name: 'foreign', type: 'http', url: stub.mcpUrl, authMode: 'oauth' });
-  const id = created.json.server.id;
-
-  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, {
-    host: 'evil.example.com',
-  });
-  assert.equal(auth.code, 200, auth.text);
-  const redirect = new URL(auth.json.authorizeUrl).searchParams.get('redirect_uri');
-  assert.equal(redirect, `https://harness.example.com/mcp-manager/callback/${id}`);
-  assert.ok(!redirect.includes('evil.example.com'), 'a foreign Host must not name the callback');
-
-  // Without a configured public origin there is nothing to fall back to: an
-  // external Host is refused rather than adopted.
-  const bare = makeCtx();
-  const created2 = await request(bare.handler, 'POST', '/mcp-manager/api/servers', { name: 'foreign2', type: 'http', url: stub.mcpUrl, authMode: 'oauth' });
-  const refused = await request(bare.handler, 'POST', `/mcp-manager/api/servers/${created2.json.server.id}/auth`, undefined, { host: 'evil.example.com' });
-  assert.equal(refused.code, 400, refused.text);
+  const redirect = redirectOf(auth.json.authorizeUrl);
+  assert.match(redirect, /^http:\/\/localhost:\d+\/callback$/);
+  assert.deepEqual(stub.registerBodies.at(-1).redirect_uris, [redirect], 'the registration must declare the loopback callback');
   await stub.close();
 });
 
@@ -441,8 +384,9 @@ it('escapes server-supplied text on the callback page', async (t) => {
   const id = created.json.server.id;
 
   // The authorization server answers with an OAuth error, and that text is what
-  // the page prints — it must never be parsed as markup on the GUI origin.
-  const callback = await request(handler, 'GET', `/mcp-manager/callback/${id}?error=%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E`);
+  // the page prints — it must never be parsed as markup.
+  const flow = await authorize(handler, id);
+  const callback = await deliverCallback(flow.toString(), { error: '<img src=x onerror=alert(1)>' });
   assert.ok(!callback.text.includes('<img'), 'markup from the query string must not reach the page');
   assert.match(callback.text, /&lt;img/);
   assert.match(callback.text, /Authorization failed/);
@@ -660,13 +604,14 @@ function seedServer(stub, name, { enabled = false, expires = Date.now() + 3600_0
       tokens: { access_token: 'example-access-old', refresh_token: 'example-refresh-old', expires_at: expires } } };
 }
 
-it('review: IPv6 loopback with port remains a valid OAuth callback origin', async t => {
+it('review: IPv6 loopback with a bound automatic port remains a valid OAuth callback origin', async t => {
+  if (!(await canBindIPv6Loopback())) return t.skip('the IPv6 loopback is not available on this host');
   const stub = await startStub(); t.after(() => stub.close());
-  writeState({ servers: [seedServer(stub, 'ipv6')] });
+  writeState({ servers: [{ ...seedServer(stub, 'ipv6'), redirectUrl: 'http://[::1]' }] });
   const { handler } = makeCtx();
-  const auth = await request(handler, 'POST', '/mcp-manager/api/servers/ipv6/auth', undefined, { host: '[::1]:3080' });
+  const auth = await request(handler, 'POST', '/mcp-manager/api/servers/ipv6/auth');
   assert.equal(auth.code, 200, auth.text);
-  assert.equal(new URL(auth.json.authorizeUrl).searchParams.get('redirect_uri'), 'http://[::1]:3080/mcp-manager/callback/ipv6');
+  assert.match(redirectOf(auth.json.authorizeUrl), /^http:\/\/\[::1\]:\d+\/callback$/);
 });
 
 it('review: expired disk access token still supplies the newest single-use refresh token', async t => {
