@@ -377,7 +377,7 @@ it('shows the effective redirect URI with a copy action and a pending-registrati
     id: 'srv-redirect', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp',
     authMode: 'oauth', status: 'needs-auth', error: '', toolCount: 0, enabled: true,
     redirectUrl: 'http://localhost',
-    redirectUri: 'http://localhost:49593/mcp-manager/callback/srv-redirect',
+    redirectUri: 'http://localhost:49593/callback',
     redirectPending: true,
   };
   const app = mount(async (url) => {
@@ -396,7 +396,7 @@ it('shows the effective redirect URI with a copy action and a pending-registrati
   const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-redirect');
   assert.ok(redirectEl, 'the effective URI element renders on the card');
   const redirect = app.render(redirectEl.type, redirectEl.props);
-  assert.match(text(redirect), /http:\/\/localhost:49593\/mcp-manager\/callback\/srv-redirect/, 'the effective URI is shown');
+  assert.match(text(redirect), /http:\/\/localhost:49593\/callback/, 'the effective URI is shown');
   assert.match(text(redirect), /Registration pending/);
   const copy = nodes(redirect).find((node) => node.type === 'button' && text(node) === 'Copy');
   assert.ok(copy, 'the URI can be copied');
@@ -471,8 +471,8 @@ it('copies the effective redirect URI verbatim and shows the copied state', asyn
     id: 'srv-copy', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp', authMode: 'oauth',
     status: 'connected', error: '', toolCount: 1, enabled: true,
     redirectUrl: 'http://localhost',
-    redirectUri: 'http://localhost:49593/mcp-manager/callback/srv-copy',
-    redirectDefaultUri: 'http://127.0.0.1:49593/mcp-manager/callback/srv-copy',
+    redirectUri: 'http://localhost:49593/callback',
+    redirectDefaultUri: 'http://127.0.0.1:49593/callback',
   };
   const created = [];
   const commands = [];
@@ -640,4 +640,122 @@ it('renders the global callback section collapsed with a status line and an erro
   assert.ok(put, 'saving posts the configuration');
   assert.deepEqual(JSON.parse(put.options.body), { mode: 'fixed', host: 'localhost', port: '8765', path: '/callback' });
   assert.equal(saved, 1);
+});
+
+it('picks up the stored callback configuration after the page first rendered without it', async () => {
+  const before = { onDemandToolInjection: false, oauthCallback: null, callbackStatus: { listeners: [], lastError: '' } };
+  const after = {
+    onDemandToolInjection: false,
+    oauthCallback: { mode: 'fixed', host: 'localhost', port: 8765, path: '/oauth/return' },
+    callbackStatus: { listeners: [], lastError: '' },
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response(before);
+    return response({});
+  });
+  app.render();
+  app.effects();
+  await settle();
+  const tree = app.render();
+  const sectionEl = nodes(tree).find((node) => node.props?.settings && typeof node.props?.onSaved === 'function');
+  assert.ok(sectionEl, 'the callback section renders');
+  app.reset();
+  let section = app.render(sectionEl.type, sectionEl.props);
+  const toggle = nodes(section).find((node) => node.type === 'button' && node.props['aria-label'] === 'OAuth callback');
+  toggle.props.onClick();
+  section = app.render(sectionEl.type, sectionEl.props);
+  assert.equal(nodes(section).filter((node) => node.type === 'input').map((node) => node.props.value).includes('8765'), false,
+    'the first render only knows the defaults');
+
+  // No reset: the same hook store must show the configuration the poll just
+  // delivered. A useState initializer would keep the stale defaults and Save
+  // would overwrite the real configuration with them.
+  section = app.render(sectionEl.type, { ...sectionEl.props, settings: after });
+  const values = nodes(section).filter((node) => node.type === 'input').map((node) => node.props.value);
+  assert.ok(values.includes('8765'), 'the stored port is shown');
+  assert.ok(values.includes('/oauth/return'), 'the stored path is shown');
+});
+
+it('uses a placeholder that does not pretend the automatic port is final', async () => {
+  const server = {
+    id: 'srv-auto', name: 'auto', type: 'http', url: 'https://mcp.example.com/mcp', authMode: 'oauth',
+    status: 'needs-auth', error: '', toolCount: 0, enabled: true,
+    clientId: '', clientSecretEnv: '', clientName: '', scope: '',
+    redirectUrl: '', redirectMode: 'automatic', redirectUri: '', redirectDefaultUri: '',
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects();
+  await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-auto');
+  cardNode.props.onEdit();
+  tree = app.render();
+  const formEl = content(tree);
+  app.reset();
+  const form = app.render(formEl.type, formEl.props);
+  const input = nodes(form).find((node) => node.type === 'input' && node.props.placeholder === 'Port assigned at authentication');
+  assert.ok(input, 'the placeholder says the port is assigned at authentication');
+  assert.match(text(form), /callback port is assigned when you authenticate/);
+});
+
+it('shows the automatic notice for an override without a port on the card', async () => {
+  const server = {
+    id: 'srv-bare', name: 'bare', type: 'http', url: 'https://mcp.example.com/mcp', authMode: 'oauth',
+    status: 'connected', error: '', toolCount: 1, enabled: true,
+    redirectUrl: 'http://localhost', redirectMode: 'override', redirectUri: '',
+    redirectLastUsedUri: 'http://localhost:3210/callback', redirectWarning: 'manual-client-automatic',
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects();
+  await settle();
+  tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-bare');
+  app.reset();
+  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-bare');
+  const redirect = app.render(redirectEl.type, redirectEl.props);
+  assert.match(text(redirect), /Port assigned at authentication/);
+  assert.match(text(redirect), /Last used redirect URI/);
+  assert.match(text(redirect), /http:\/\/localhost:3210\/callback/);
+  assert.match(text(redirect), /manual Client ID needs a fixed URI/);
+});
+
+it('localizes the callback section in both languages', async () => {
+  const settings = {
+    onDemandToolInjection: false,
+    oauthCallback: { mode: 'fixed', host: 'localhost', port: 8765, path: '/callback' },
+    callbackStatus: { listeners: [], lastError: '' },
+  };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response(settings);
+    return response({});
+  });
+  let tree = app.render();
+  app.effects();
+  await settle();
+  tree = app.render();
+  const sectionEl = nodes(tree).find((node) => node.props?.settings && typeof node.props?.onSaved === 'function');
+  app.reset();
+  let section = app.render(sectionEl.type, sectionEl.props);
+  assert.match(text(section), /OAuth callback/);
+  app.setLocale('zh');
+  section = app.render(sectionEl.type, sectionEl.props);
+  assert.match(text(section), /OAuth 回调/);
+  assert.match(text(section), /固定地址/);
 });

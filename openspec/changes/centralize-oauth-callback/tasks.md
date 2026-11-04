@@ -25,7 +25,7 @@
 ## 4. Callback manager
 
 - [x] 4.1 Implement the listener pool: `acquire({host, port, path, onRequest})` and `release()`, one port per listener, a per-listener path table and reference counting; verify the manager test serves two paths on one port and frees the port after both are released.
-- [x] 4.2 Implement automatic allocation that binds IPv4 on port 0 and widens to `::1` on the same port, marking the listener IPv4-only when the IPv6 bind fails; verify tests cover the both-families case and the IPv4 fallback.
+- [x] 4.2 Implement automatic allocation that binds IPv4 on port 0 and widens to `::1` on the same port, marking the listener IPv4-only when the IPv6 bind fails; verify the both-families case is tested (the IPv4-fallback branch runs only where `::1` cannot be bound, and the test skips there).
 - [x] 4.3 Implement typed bind failures for a fixed port (`EADDRINUSE`, `EACCES`, `EADDRNOTAVAIL`) with no fallback port; verify the test asserts the error carries the port and cause and that no URI was produced.
 - [x] 4.4 Implement request handling: exact normalized path match, `GET` only, `404` for an unregistered path and `405` for another method; verify tests hit a live listener with `node:http` and assert the statuses.
 - [x] 4.5 Implement `closeAll()` and confirm it closes every socket of every listener; verify a test rebinds the same fixed port immediately after `closeAll()`.
@@ -37,8 +37,8 @@
 - [x] 5.2 Implement `completeAuthorization(session, params)`: reject a mismatched or unknown state, handle a provider `error`, exchange the code with the session's own client identity, redirect URI and verifier, persist, then reconnect the connection; verify the end-to-end test completes a flow through a real callback request.
 - [x] 5.3 Replace the per-server `pending` map with the session store everywhere (start, exchange, status) and delete the old lookup; verify `grep -n "pending\.\(get\|set\)" lib/index.js` returns no authorization-flow hit and the OAuth suites pass.
 - [x] 5.4 Release the session and its listener on success, provider error, exchange failure and expiry; verify tests assert the port is free after each outcome.
-- [x] 5.5 Drive expiry from a timer plus the lazy check on consume, and move the connection status back to `needs-auth` when the last session for it expires; verify the test advances the injected clock and observes both the status and the released port.
-- [x] 5.6 Cancel a connection's pending sessions when the server is deleted or disabled; verify a test starts authorization, deletes the server, and asserts no session remains and the port is released.
+- [x] 5.5 Drive expiry from a timer plus the lazy check on consume, and move the connection status back to `needs-auth` when the last session for it expires; verify the store test with an injected clock covers expiry and the reaper outcome, and the flow tests assert a released port on completion and failure (the 30 s host timer itself is not exercised end to end).
+- [x] 5.6 Cancel a connection's pending sessions when the server is deleted, disabled, renamed or removed by a rescan; verify tests start authorization, then delete or disable the server, and assert the port is released for both the global and the workspace tier.
 - [x] 5.7 Close every listener and clear the store in the plugin teardown hook; verify the unload test asserts the fixed port is bindable afterwards.
 - [x] 5.8 Unify `POST /servers/:id/auth` and `POST /workspaces/auth` on `startAuthorization(server)`; verify both API tests still return an authorization URL and that a global and a workspace server can authorize concurrently.
 - [x] 5.9 Remove the GUI callback route and derive nothing from the request: delete `browserOrigin`, `publicOriginsOf`, `allowedPublicOrigins`, `localGuiPort`, `portOfOrigin`, `normalizeLoopbackHost`, `redirectContext`, `redirectOriginFor`, `parseRedirectParts`, `parseRedirectOrigin` and `REDIRECT_ORIGIN_RE`; verify `grep -n "browserOrigin\|publicOrigins\|redirectOriginFor\|mcp-manager/callback" lib/index.js` returns nothing and the full suite passes.
@@ -65,7 +65,7 @@
 - [x] 8.1 Replace `test/redirect-url.test.js` with the four new suites and port the cases that still describe behavior (workspace override preservation, manual Client ID never re-registered, save keeps tokens); verify `node --test test/oauth-redirect-resolution.test.js test/oauth-callback-manager.test.js test/oauth-session-store.test.js test/oauth-callback-flow.test.js` passes.
 - [x] 8.2 Update `test/oauth-discovery.test.js` to assert the redirect URI's shape with a fixed configuration instead of a literal port, keeping its discovery, re-registration and application-type coverage; verify the file passes.
 - [x] 8.3 Update the client test for the new section and fields and confirm the remaining suites still pass; verify `node --test test/client-language.test.js` passes.
-- [x] 8.4 Add the provider-behavior cases to the end-to-end stub (`error=access_denied` on the callback and a rejected redirect URI on the authorization request) and assert the operator-facing messages; verify the flow suite covers both.
+- [x] 8.4 Add the provider-behavior cases to the end-to-end stub (`error=access_denied` on the callback, and a failing token endpoint) and assert the operator-facing messages; verify the flow suite covers both.
 - [x] 8.5 Add `test/helpers/oauth-harness.js` with the stubbed `ctx` and the authorization-server stub used by the new suites, without changing the existing inline harnesses; verify the new suites import it and `npm test` is green.
 
 ## 9. Documentation and release

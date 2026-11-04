@@ -332,7 +332,7 @@ it('lets a configured client-secret environment variable win over the stored reg
       oauth: {
         clientId: 'dcr-client-1',
         clientName: 'dsh-mcp-manager-seeded-secret',
-        redirect: `http://127.0.0.1:3080/mcp-manager/callback/${id}`,
+        redirect: 'http://127.0.0.1:3080/callback',
         clientSecret: 'stored-registration-secret',
         tokens: { access_token: 'spent-access', refresh_token: 'refresh-spent', expires_at: 0 },
       },

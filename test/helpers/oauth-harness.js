@@ -91,7 +91,7 @@ export async function canBindIPv6Loopback() {
  * protected-resource pointer, and the authorization server advertises RFC 7591
  * registration and a token endpoint. Records every registration and form.
  */
-export async function startAuthorizationStub() {
+export async function startAuthorizationStub({ failToken = false } = {}) {
   const forms = [];
   const registrations = [];
   const revoked = new Set();
@@ -144,6 +144,7 @@ export async function startAuthorizationStub() {
       }
       if (req.url === '/token') {
         forms.push(new URLSearchParams(raw));
+        if (failToken) return send(400, { error: 'invalid_grant', error_description: 'code expired' });
         issued += 1;
         return send(200, { access_token: `access-${issued}`, refresh_token: `refresh-${issued}`, token_type: 'bearer', expires_in: 3600 });
       }

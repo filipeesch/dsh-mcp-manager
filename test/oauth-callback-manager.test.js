@@ -103,6 +103,7 @@ it('fails a busy fixed port with an actionable error and no fallback', async () 
         assert.equal(error.code, 'EADDRINUSE');
         assert.equal(error.port, String(port));
         assert.match(error.message, new RegExp(`port ${port} is already in use`));
+        assert.ok(error.cause, 'the underlying socket error is kept for diagnostics');
         return true;
       },
     );
@@ -146,4 +147,48 @@ it('closes every socket on closeAll', async () => {
   await manager.closeAll();
   assert.deepEqual(await manager.status(), []);
   assert.equal(await canBindPort(port), true);
+});
+
+it('shares one listener when two acquisitions race for the same fixed port', async () => {
+  const port = await freePort();
+  const manager = createCallbackManager();
+  const [first, second] = await Promise.all([
+    manager.acquire({ host: '127.0.0.1', port, path: '/a', onRequest: handlerFor('a', []) }),
+    manager.acquire({ host: '127.0.0.1', port, path: '/b', onRequest: handlerFor('b', []) }),
+  ]);
+  assert.equal(first.port, String(port));
+  assert.equal(second.port, String(port));
+  const status = await manager.status();
+  assert.equal(status.length, 1, 'a concurrent bind must not report a self-inflicted EADDRINUSE');
+  assert.deepEqual(status[0].paths.sort(), ['/a', '/b']);
+  await first.release();
+  await second.release();
+  assert.equal(await canBindPort(port), true);
+});
+
+it('shares one listener when two automatic acquisitions race', async () => {
+  const manager = createCallbackManager();
+  const [first, second] = await Promise.all([
+    manager.acquire({ host: 'localhost', path: '/a', onRequest: handlerFor('a', []) }),
+    manager.acquire({ host: 'localhost', path: '/b', onRequest: handlerFor('b', []) }),
+  ]);
+  assert.equal(first.port, second.port);
+  assert.equal((await manager.status()).length, 1);
+  await first.release();
+  await second.release();
+});
+
+it('ignores a duplicated or stale release instead of closing a re-created listener', async () => {
+  const port = await freePort();
+  const manager = createCallbackManager();
+  const first = await manager.acquire({ host: '127.0.0.1', port, path: '/callback', onRequest: handlerFor('one', []) });
+  await first.release();
+  const second = await manager.acquire({ host: '127.0.0.1', port, path: '/callback', onRequest: handlerFor('two', []) });
+  // A late release of the first acquisition must not touch the new listener.
+  await first.release();
+  await manager.release(first);
+  assert.equal((await manager.status()).length, 1, 'the current flow keeps its listener');
+  assert.equal((await hit(second.uri)).body, 'two');
+  await second.release();
+  assert.deepEqual(await manager.status(), []);
 });

@@ -76,9 +76,9 @@ The manager knows nothing about MCP connections: `acquire({ host, port, path, on
 2. otherwise, add the missing family sockets to that listener on its existing port;
 3. otherwise (automatic mode, or the port cannot take the extra family) create a new listener.
 
-`release` decrements the path and listener refs and closes every socket of a listener whose refs reach zero.
+Each `acquire` returns a single-use grant that names its listener; `release` requires that grant, decrements the path and listener refs, and closes every socket of a listener whose refs reach zero. A bare port/path pair is never accepted, because a later flow can re-create a listener on the same port.
 
-*Why*: one port with several sockets is the only way to keep `localhost` working on both families without allocating two ports, and a refcount is what makes "do not stop while another flow is pending" a property of the data rather than of a check in the right place.
+*Why*: one port with several sockets is the only way to keep `localhost` working on both families without allocating two ports, and a refcount is what makes "do not stop while another flow is pending" a property of the data rather than of a check in the right place. Concurrent acquisitions of the same address await one in-flight bind promise, so two tabs cannot turn the plugin's own bind into a reported `EADDRINUSE`.
 
 *Alternatives*: one server bound to `::` with `ipv6Only: false` (rejected — it would accept non-loopback connections, violating the loopback-only rule); bind `localhost` by name (rejected — Node resolves it to a single address, so the other family fails silently); reuse only exact `host:port` keys (rejected — `localhost` and `127.0.0.1` on the same port would collide instead of sharing).
 

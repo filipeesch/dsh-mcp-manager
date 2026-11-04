@@ -396,9 +396,199 @@ it('reports an unservable stored override instead of falling back to an automati
 
   const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
   assert.equal(auth.code, 500, auth.text);
-  assert.match(auth.json.error, /plain HTTP/);
+  assert.match(auth.json.error, /harness\.example\.com\/callback cannot be served/);
+  assert.match(auth.json.error, /only http:\/\/ is accepted|loopback address/);
   assert.equal(stored(id).redirectUrl, 'https://harness.example.com/callback', 'the stored value is not rewritten');
   const view = (await request(handler, 'GET', '/mcp-manager/api/servers')).json.servers.find((server) => server.id === id);
   assert.equal(view.redirectWarning, 'invalid');
   assert.equal(view.redirectUri, '');
+});
+
+it('validates, persists and reports the global callback configuration', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+
+  const defaults = await request(handler, 'GET', '/mcp-manager/api/settings');
+  assert.equal(defaults.code, 200);
+  assert.deepEqual(defaults.json.oauthCallback, { mode: 'automatic', host: 'localhost', port: '', path: '/callback' });
+  assert.deepEqual(defaults.json.callbackStatus.listeners, []);
+  assert.equal(defaults.json.callbackStatus.configError, '');
+  assert.equal(defaults.json.callbackStatus.lastError, '');
+
+  const port = await freePort();
+  const saved = await request(handler, 'PUT', '/mcp-manager/api/settings/callback', {
+    mode: 'fixed', host: 'localhost', port, path: '/oauth/return',
+  });
+  assert.equal(saved.code, 200, saved.text);
+  assert.equal(saved.json.oauthCallback.mode, 'fixed');
+  const persisted = JSON.parse(readFileSync(statePath, 'utf8')).oauthCallback;
+  assert.deepEqual(persisted, { mode: 'fixed', host: 'localhost', port: String(port), path: '/oauth/return' });
+
+  for (const body of [
+    { mode: 'fixed', host: 'localhost', path: '/callback' },
+    { mode: 'fixed', host: 'mcp.example.com', port },
+    { mode: 'fixed', host: 'localhost', port: 0 },
+    { mode: 'sometimes', host: 'localhost', port },
+    { mode: 'fixed', host: 'localhost', port, path: '/a?x=1' },
+  ]) {
+    const rejected = await request(handler, 'PUT', '/mcp-manager/api/settings/callback', body);
+    assert.equal(rejected.code, 400, JSON.stringify(body));
+    assert.match(rejected.json.error, /port|loopback|automatic or fixed|query/i);
+    assert.deepEqual(JSON.parse(readFileSync(statePath, 'utf8')).oauthCallback, persisted, 'a rejected save changes nothing');
+  }
+
+  // A hand-edited invalid configuration is surfaced on the next start and fails
+  // the attempt loudly instead of silently falling back to an automatic address.
+  const broken = JSON.parse(readFileSync(statePath, 'utf8'));
+  broken.oauthCallback = { mode: 'fixed', host: 'mcp.example.com', port };
+  writeFileSync(statePath, JSON.stringify(broken));
+  const restarted = makeCtx();
+  const status = await request(restarted.handler, 'GET', '/mcp-manager/api/settings');
+  assert.match(status.json.callbackStatus.configError, /loopback/);
+  const id = await createServerFor(restarted.handler, stub, 'bad-config');
+  const auth = await request(restarted.handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(auth.code, 500, auth.text);
+  assert.match(auth.json.error, /loopback/);
+  assert.deepEqual((await request(restarted.handler, 'GET', '/mcp-manager/api/settings')).json.callbackStatus.listeners, []);
+});
+
+it('clears the last listener error after a successful acquire', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+
+  const port = await freePort();
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen({ host: '127.0.0.1', port }, resolve));
+  try {
+    await request(handler, 'PUT', '/mcp-manager/api/settings/callback', { mode: 'fixed', host: 'localhost', port, path: '/callback' });
+    const id = await createServerFor(handler, stub, 'busy-again');
+    assert.equal((await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`)).code, 500);
+    assert.match((await request(handler, 'GET', '/mcp-manager/api/settings')).json.callbackStatus.lastError, /already in use/);
+  } finally {
+    await new Promise((resolve) => holder.close(resolve));
+  }
+  const id = await createServerFor(handler, stub, 'recovered');
+  assert.equal((await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`)).code, 200);
+  assert.equal((await request(handler, 'GET', '/mcp-manager/api/settings')).json.callbackStatus.lastError, '');
+});
+
+it('reports the resolution mode, the effective URI and the last used URI', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const id = await createServerFor(handler, stub, 'view-fields');
+  const view = async () => (await request(handler, 'GET', '/mcp-manager/api/servers')).json.servers.find((server) => server.id === id);
+
+  let row = await view();
+  assert.equal(row.redirectMode, 'automatic');
+  assert.equal(row.redirectUri, '');
+  assert.equal(row.redirectDefaultUri, '');
+  assert.equal(row.redirectLastUsedUri, '');
+  assert.equal(row.redirectPending, false);
+  assert.equal(row.redirectWarning, '');
+
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  const redirect = redirectOf(auth.json.authorizeUrl);
+  assert.match((await deliverCallback(auth.json.authorizeUrl)).text, /Authorized/);
+  row = await view();
+  assert.equal(row.redirectLastUsedUri, redirect);
+  assert.equal(row.redirectMode, 'automatic');
+
+  const port = await freePort();
+  const edited = await request(handler, 'PUT', `/mcp-manager/api/servers/${id}`, {
+    name: 'view-fields', type: 'http', url: stub.mcpUrl, authMode: 'oauth', redirectUrl: `http://localhost:${port}/gh`,
+  });
+  assert.equal(edited.code, 200, edited.text);
+  row = await view();
+  assert.equal(row.redirectMode, 'override');
+  assert.equal(row.redirectUri, `http://localhost:${port}/gh`);
+  assert.equal(row.redirectWarning, '');
+
+  // A manual Client ID cannot follow an automatic port; the card is told so.
+  const manual = await request(handler, 'PUT', `/mcp-manager/api/servers/${id}`, {
+    name: 'view-fields', type: 'http', url: stub.mcpUrl, authMode: 'oauth', clientId: 'manual-client', redirectUrl: '',
+  });
+  assert.equal(manual.code, 200, manual.text);
+  row = await view();
+  assert.equal(row.redirectMode, 'automatic');
+  assert.equal(row.redirectWarning, 'manual-client-automatic');
+});
+
+it('reports a fixed configuration as a final URI on the view', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const port = await freePort();
+  await request(handler, 'PUT', '/mcp-manager/api/settings/callback', { mode: 'fixed', host: 'localhost', port, path: '/oauth/return' });
+  const id = await createServerFor(handler, stub, 'fixed-view');
+  const row = (await request(handler, 'GET', '/mcp-manager/api/servers')).json.servers.find((server) => server.id === id);
+  assert.equal(row.redirectMode, 'fixed');
+  assert.equal(row.redirectUri, `http://localhost:${port}/oauth/return`);
+  assert.equal(row.redirectDefaultUri, `http://localhost:${port}/oauth/return`);
+
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(redirectOf(auth.json.authorizeUrl), `http://localhost:${port}/oauth/return`);
+  assert.match((await deliverCallback(auth.json.authorizeUrl)).text, /Authorized/);
+  await waitFor(() => canBindPort(port), 'the fixed port is released');
+});
+
+it('rejects an invalid per-server redirect URI without changing the stored value', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const id = await createServerFor(handler, stub, 'reject-save');
+  for (const redirectUrl of ['https://relay.example.com/callback', 'http://localhost:8080/a?x=1', 'mcp.example.com']) {
+    const rejected = await request(handler, 'PUT', `/mcp-manager/api/servers/${id}`, {
+      name: 'reject-save', type: 'http', url: stub.mcpUrl, authMode: 'oauth', redirectUrl,
+    });
+    assert.equal(rejected.code, 400, `${redirectUrl}: ${rejected.text}`);
+    assert.match(rejected.json.error, /cannot be served|query|loopback/);
+    assert.equal(stored(id).redirectUrl, undefined, 'a rejected value is never persisted');
+  }
+});
+
+it('releases the listener when the token exchange fails', async (t) => {
+  const stub = await startAuthorizationStub({ failToken: true });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const id = await createServerFor(handler, stub, 'exchange-fails');
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  const port = new URL(redirectOf(auth.json.authorizeUrl)).port;
+  const callback = await deliverCallback(auth.json.authorizeUrl);
+  assert.match(callback.text, /Token exchange failed/);
+  assert.equal(stub.forms.length, 1);
+  const row = (await request(handler, 'GET', '/mcp-manager/api/servers')).json.servers.find((server) => server.id === id);
+  assert.equal(row.status, 'error');
+  await waitFor(() => canBindPort(port), 'a failed exchange still releases the port');
+});
+
+it('cancels a pending workspace flow when the server is disabled in that workspace', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const workspaceDir = join(scratchHome, 'workspace-disable-flow');
+  mkdirSync(join(workspaceDir, '.dsh', 'dshmm'), { recursive: true });
+  writeFileSync(join(workspaceDir, '.dsh', 'dshmm', 'mcp.json'), JSON.stringify({
+    mcpServers: { wsflow: { type: 'http', url: stub.mcpUrl, authMode: 'oauth' } },
+  }, null, 2));
+  const agents = makeAgents();
+  const { handler } = makeCtx({}, { workspacePaths: [workspaceDir], agents });
+  const { ready } = agents.create({ cwd: workspaceDir });
+  await ready;
+
+  const auth = await request(handler, 'POST', '/mcp-manager/api/workspaces/auth', { path: workspaceDir, name: 'wsflow' });
+  assert.equal(auth.code, 200, auth.text);
+  const port = new URL(redirectOf(auth.json.authorizeUrl)).port;
+  const disabled = await request(handler, 'POST', '/mcp-manager/api/workspaces/server-state', {
+    path: workspaceDir, name: 'wsflow', enabled: false,
+  });
+  assert.equal(disabled.code, 200, disabled.text);
+  await waitFor(() => canBindPort(port), 'disabling a workspace server releases its pending listener');
+
+  const row = (await request(handler, 'GET', '/mcp-manager/api/workspaces')).json.workspaces
+    .find((ws) => ws.path === workspaceDir).servers.find((server) => server.name === 'wsflow');
+  assert.equal(row.status, 'disabled');
+  // The flow is gone, not waiting to resurrect a deliberately disabled server.
+  await assert.rejects(() => deliverCallback(auth.json.authorizeUrl));
 });

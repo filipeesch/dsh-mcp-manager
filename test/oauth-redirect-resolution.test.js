@@ -77,13 +77,13 @@ it('accepts a complete redirect override and canonicalizes it', () => {
 });
 
 it('rejects an override that cannot be served', () => {
-  assert.throws(() => parseRedirectOverride('https://localhost:8080/cb'), /plain HTTP/);
-  assert.throws(() => parseRedirectOverride('https://mcp.example.com/callback'), /plain HTTP/);
+  assert.throws(() => parseRedirectOverride('https://localhost:8080/cb'), /only http:\/\/ is accepted/);
+  assert.throws(() => parseRedirectOverride('https://mcp.example.com/callback'), /must be a loopback address/);
   assert.throws(() => parseRedirectOverride('mcp.example.com:8080'), /loopback/);
   assert.throws(() => parseRedirectOverride('http://localhost:8080/cb?x=1'), /query, fragment or credentials/);
   assert.throws(() => parseRedirectOverride('http://localhost:8080/cb#frag'), /query, fragment or credentials/);
   assert.throws(() => parseRedirectOverride('http://user:pass@localhost/cb'), /query, fragment or credentials/);
-  assert.throws(() => parseRedirectOverride('ftp://localhost/cb'), /plain HTTP/);
+  assert.throws(() => parseRedirectOverride('ftp://localhost/cb'), /only http:\/\/ is accepted/);
   assert.throws(() => parseRedirectOverride('http://localhost:0/cb'), /between 1 and 65535/);
 });
 
@@ -132,7 +132,7 @@ it('keeps an explicit override port verbatim', () => {
 });
 
 it('never falls back from an unservable stored override', () => {
-  assert.throws(() => resolveRedirect({ override: 'https://relay.example.com/callback', config: AUTO }), /plain HTTP/);
+  assert.throws(() => resolveRedirect({ override: 'https://relay.example.com/callback', config: AUTO }), /relay\.example\.com\/callback cannot be served/);
   assert.throws(() => resolveRedirect({ override: 'relay.example.com', config: FIXED }), /loopback/);
 });
 

@@ -71,6 +71,25 @@ it('expires a session ten minutes after it was created', () => {
   assert.equal(expired.session.serverId, 'srv-2');
 });
 
+it('reports a reaped session as expired, not as already completed', () => {
+  let now = 0;
+  const store = createSessionStore({ now: () => now });
+  const state = store.create(flow());
+  now = SESSION_TTL_MS + 1;
+  assert.equal(store.expire().length, 1);
+  assert.equal(store.consume(state).status, 'expired', 'the reaper must not turn an expired state into a replay');
+});
+
+it('remove() drops one session by state and reports it as consumed', () => {
+  const store = createSessionStore();
+  const state = store.create(flow());
+  const removed = store.remove(state);
+  assert.equal(removed.serverId, 'srv-1');
+  assert.equal(store.pendingFor('srv-1').length, 0);
+  assert.equal(store.consume(state).status, 'consumed');
+  assert.equal(store.remove(state), null);
+});
+
 it('expire() returns the elapsed sessions so their listeners can be released', () => {
   let now = 0;
   const store = createSessionStore({ now: () => now });

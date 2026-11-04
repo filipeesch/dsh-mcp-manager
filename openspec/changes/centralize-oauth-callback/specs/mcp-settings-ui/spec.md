@@ -76,7 +76,7 @@ When the global mode is automatic and the server has no override with an explici
 
 ### Requirement: Localized labels for the new controls
 
-Every user-visible string introduced by this change SHALL be present in both supported interface languages, and the page SHALL render them in the language selected in the application's language setting. This covers the redirect URI field and its help text, the automatic-mode and manual-Client-ID messages, the global callback section and its mode, hostname, port and path labels, its status line, its listener list, and every callback diagnostic shown in the interface.
+Every user-visible string introduced by this change SHALL be present in both supported interface languages, and the page SHALL render them in the language selected in the application's language setting. This covers the redirect URI field and its help text, the automatic-mode and manual-Client-ID messages, the global callback section and its mode, hostname, port and path labels, its status line, and its listener list. Host-generated diagnostic text (a listener error such as a busy port, or a provider message) stays in the language the plugin produced, like every other server-supplied diagnostic.
 
 #### Scenario: Both languages are complete
 

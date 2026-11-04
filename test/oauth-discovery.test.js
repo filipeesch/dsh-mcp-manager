@@ -329,8 +329,9 @@ it('explains an AS without dynamic registration instead of reporting a bare HTTP
   await stub.close();
 });
 
-it('sends client_secret only when its environment variable resolves', async () => {
+it('sends client_secret only when its environment variable resolves', async (t) => {
   const stub = await startStub();
+  t.after(() => stub.close());
   const { handler } = makeCtx();
   process.env.DSH_MM_TEST_SECRET = 'example-secret';
   const created = await request(handler, 'POST', '/mcp-manager/api/servers', {
@@ -348,17 +349,19 @@ it('sends client_secret only when its environment variable resolves', async () =
   assert.match(callback.text, /Authorized/);
   assert.ok(!callback.text.includes('example-secret'), 'the secret must never reach the browser');
 
-  // A configured-but-unset variable fails by name and never leaks a value.
+  // A configured-but-unset variable fails by name and never leaks a value. The
+  // secret is read when the flow starts (it belongs to that attempt), so the
+  // error surfaces before a browser is opened.
+  const formsBefore = stub.forms.length;
   const second = await request(handler, 'POST', '/mcp-manager/api/servers', {
     name: 'unset', type: 'http', url: stub.mcpUrl, authMode: 'oauth', clientId: 'c2', clientSecretEnv: 'DSH_MM_MISSING_SECRET',
   });
   const secondId = second.json.server.id;
   const secondAuth = await request(handler, 'POST', `/mcp-manager/api/servers/${secondId}/auth`);
-  const failed = await deliverCallback(secondAuth.json.authorizeUrl);
-  assert.match(failed.text, /DSH_MM_MISSING_SECRET/);
+  assert.equal(secondAuth.code, 500, secondAuth.text);
+  assert.match(secondAuth.json.error, /DSH_MM_MISSING_SECRET/);
+  assert.equal(stub.forms.length, formsBefore, 'a missing secret never reaches the token endpoint');
   delete process.env.DSH_MM_TEST_SECRET;
-
-  await stub.close();
 });
 
 it('exposes a redacted attempt log for a failed connection', async (t) => {

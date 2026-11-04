@@ -58,6 +58,38 @@ This release replaces it with a subsystem that owns the callback transport.
   preparation and URL construction, and the loopback predicate is shared with
   the registration `application_type` classification.
 
+### Hardening from the independent review
+
+- Concurrent acquisitions of the same address await one in-flight bind, so two
+  tabs no longer turn the plugin's own bind into a reported `EADDRINUSE`; a
+  guard now only reports a busy port the plugin does not own.
+- `acquire` returns a single-use grant and only that grant may release it, so a
+  late or duplicated release can never close a listener another flow re-created
+  on the same port. A failed authorization start also removes its session.
+- Disabling, deleting or renaming a workspace server — and a rescan that drops
+  it — cancels its pending authorization, and a callback can no longer
+  reconnect a server that was deliberately disabled while the flow was pending.
+- The session pins the client identity, secret and token-endpoint auth method;
+  a concurrent flow that re-registered the client cannot make the exchange send
+  one client's id with another's secret, and the stored registration is
+  re-pointed at the client that completed last so the pair stays refresheable.
+- A reaped session reports "expired" rather than "already completed" (the
+  tombstone carries the outcome).
+- An unservable stored redirect value names the value and the accepted forms in
+  the error (host is checked before scheme, so `https://public-host` reports the
+  reason that matters), and a hand-edited invalid global callback configuration
+  is surfaced in the Advanced section and fails an authorization start loudly
+  instead of silently degrading to an automatic address.
+- The provider `error` text on the callback page goes through the same redactor
+  as the log; the authorization endpoint must be an http(s) URL; the page's
+  back-link is loopback-only.
+- The Advanced form keeps a draft only while the operator edits it, so it shows
+  the stored configuration delivered by the poll instead of the defaults from
+  its first render (which Save would otherwise write back). The automatic-mode
+  field placeholder no longer looks like a final URI, and an override without a
+  port is presented as "the port is assigned at authentication" — including for
+  a manually configured Client ID.
+
 ## Breaking changes
 
 - `config.publicOrigins` no longer participates in OAuth (it existed only for
@@ -79,17 +111,19 @@ Verified on macOS arm64 (darwin) with Node v24.21.0, using disposable
 `HOME`/`USERPROFILE`/`DSH_HOME` paths and loopback fixtures. No real provider or
 browser round trip was performed here.
 
-- `npm test`: **314 passed, 0 failed, 0 cancelled, 0 skipped**
+- `npm test`: **330 passed, 0 failed, 0 cancelled, 0 skipped**
   (`duration_ms` ≈ 75 s).
 - New suites:
   - `test/oauth-callback-manager.test.js` — automatic allocation and port
     release, listener sharing across paths, 404/405 handling, fixed-port reuse,
-    a busy fixed port failing with `EADDRINUSE` and no fallback, two fixed
-    ports, dual-stack widening (skipped when the host has no IPv6 loopback) and
-    `closeAll`.
+    a busy fixed port failing with `EADDRINUSE` (cause preserved) and no
+    fallback, two fixed ports, dual-stack widening (skipped when the host has no
+    IPv6 loopback), concurrent binds sharing one listener, stale/duplicate
+    releases being ignored, and `closeAll`.
   - `test/oauth-session-store.test.js` — unique states, single use, replay
-    tombstones, ten-minute expiry with an injected clock, per-connection index,
-    concurrent flows for one connection, `removeFor`, `clear`.
+    tombstones, ten-minute expiry with an injected clock (including the reaper
+    reporting `expired`), per-connection index, concurrent flows for one
+    connection, `remove`, `removeFor`, `clear`.
   - `test/oauth-redirect-resolution.test.js` — loopback predicates, IPv6 URL
     formatting, path normalization, configuration validation, override parsing
     and canonicalization, precedence and inheritance, unservable stored values.
@@ -99,14 +133,20 @@ browser round trip was performed here.
     states, provider `error`, fixed mode plus a busy port, cancellation on
     delete/disable, unload, redirect lifecycle (save keeps tokens, next
     authentication re-registers, a manual Client ID never registers), a
-    hand-edited override, a workspace override and an unservable legacy value.
+    hand-edited override, a workspace override and an unservable legacy value;
+    plus the global configuration (defaults, persistence, every rejection, a
+    hand-edited invalid value, the cleared listener error), the view fields for
+    automatic/fixed/override/manual-client, a rejected per-server save, a failed
+    exchange releasing its port, and a disabled workspace server cancelling its
+    pending flow.
 - Migrated suites: `test/oauth-discovery.test.js` now asserts the callback shape
   and that a loopback registration is always `native`; `test/oauth-scope.test.js`
   and `test/oauth-dcr-client-name.test.js` deliver real callbacks;
   `test/oauth-resource.test.js` dropped the request-derived-origin cases and
   covers the loopback callback behind a proxy; `test/client-language.test.js`
-  covers the Advanced section, its status line/error badge, the save request and
-  the complete-URI field. `test/redirect-url.test.js` was replaced by the four
+  covers the Advanced section, its status line/error badge, the save request,
+  the complete-URI field, the stored configuration surviving the first render,
+  the automatic placeholder, the automatic-mode card notice and both languages. `test/redirect-url.test.js` was replaced by the four
   new suites.
 - `openspec validate centralize-oauth-callback --strict`: valid.
 
