@@ -46,6 +46,12 @@ This release replaces it with a subsystem that owns the callback transport.
   or — in automatic mode — that the port is assigned at authentication plus the
   URI the last authentication used, and warns when a manual Client ID cannot
   follow a changing URI.
+- Server cards are simpler: they start collapsed, the expanded body holds only
+  the controls (enable switch labelled `Enabled`/`Disabled`, **Logs**, **Edit**,
+  **Delete**) and the log panel below them, and no configuration text. The
+  needs-auth status badge is the authentication action; the menu is gone and the
+  action row wraps instead. The effective redirect URI, its copy action, the
+  pending-registration state and the redirect warnings moved to the edit form.
 - Callback diagnostics: new `callback-listener` and `callback-receive` attempt
   phases, plus the last listener error in the Advanced section. `state` stays
   redacted from logs (it is now the only routing key).

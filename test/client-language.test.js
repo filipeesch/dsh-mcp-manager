@@ -248,23 +248,31 @@ it('shows a collapsed connection error and lazily loads the attempt log', async 
   assert.doesNotMatch(text(collapsed), /Logs/, 'the log toggle lives in the expanded card');
   assert.ok(!calls.some((url) => url.endsWith('/logs')), 'logs must not be fetched until requested');
 
-  // ...and expanding the card reveals the lazily-loaded log panel.
-  const expanded = renderCard({ type: cardNode(tree).type, props: { ...cardNode(tree).props, open: true } });
-  assert.match(text(expanded), /may not support dynamic client registration/, 'the reason stays visible while expanded');
-  const logNode = nodes(expanded).find((node) => node.props?.serverId === 'srv-1');
-  assert.ok(logNode, 'the log panel renders once expanded');
-
-  // The panel itself is collapsed until toggled, then fetches on demand.
-  const logProps = { ...logNode.props, key: 'logs' };
-  let log = renderCard({ type: logNode.type, props: logProps });
-  assert.match(text(log), /Logs/);
-  assert.doesNotMatch(text(log), /No log entries yet/, 'the log body is hidden until toggled');
+  // ...and expanding the card reveals the log toggle in the action row.
+  let card = renderCard({ type: cardNode(tree).type, props: { ...cardNode(tree).props, open: true } });
+  assert.match(text(card), /may not support dynamic client registration/, 'the reason stays visible while expanded');
+  const toggleEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.log);
+  assert.ok(toggleEl, 'the log toggle sits in the action row');
+  const toggleAt = nodes(card).indexOf(toggleEl);
+  const editAt = nodes(card).findIndex((node) => node.type === 'button' && text(node) === 'Edit');
+  assert.ok(toggleAt >= 0 && toggleAt < editAt, 'Logs sits next to Edit');
+  assert.doesNotMatch(text(card), /No log entries yet/, 'the log body is hidden until toggled');
   assert.ok(!calls.some((url) => url.endsWith('/logs')), 'opening the card alone must not fetch the log');
-  nodes(log).find((node) => node.props.className === 'mm_logToggle').props.onClick();
+
+  // Toggling fetches on demand and renders the panel below the action row.
+  const toggle = app.render(toggleEl.type, toggleEl.props);
+  toggle.props.onClick();
   await settle();
-  log = app.render(logNode.type, logProps);
+  await settle();
+  card = app.render(cardNode(tree).type, { ...cardNode(tree).props, open: true });
   assert.ok(calls.some((url) => url.endsWith('/servers/srv-1/logs')), 'the toggle must fetch the log');
-  assert.match(text(log), /authorization server metadata/);
+  const panelEl = nodes(card).find((node) => typeof node.type === 'function' && node.type.name === 'AttemptLogPanel');
+  assert.ok(panelEl, 'the log panel renders below the action row');
+  const panel = app.render(panelEl.type, panelEl.props);
+  assert.match(text(panel), /authorization server metadata/);
+  const panelAt = nodes(card).indexOf(panelEl);
+  const actionsAt = nodes(card).findIndex((node) => node.props?.className === 'mm_cardActions');
+  assert.ok(panelAt > actionsAt, 'the log panel renders after the action row');
 });
 
 it('shows the localized insufficient-scope message and a scoped re-auth button', async () => {
@@ -300,7 +308,7 @@ it('shows the localized insufficient-scope message and a scoped re-auth button',
   const workspaceNode = nodes(tree).find((node) => node.props?.server?.id === 'ws-scope');
   assert.ok(workspaceNode, 'the workspace server row renders');
 
-  const primaryButton = (rendered) => nodes(rendered).find((node) => node.type === 'button' && node.props.className === 'mm_btn primary');
+  const authChip = (rendered) => nodes(rendered).find((node) => node.type === 'button' && String(node.props.className).includes('mm_badge auth'));
   const renderRow = (node) => { app.reset(); return app.render(node.type, node.props); };
 
   // The global row carries oauth.insufficientScope; the raw host error is
@@ -308,13 +316,13 @@ it('shows the localized insufficient-scope message and a scoped re-auth button',
   let row = renderRow(expanded);
   assert.match(text(row), /Insufficient scope: the token lacks the required scope \(mcp:use\)\./);
   assert.doesNotMatch(text(row), /insufficient scope \(requires:/, 'the raw host error is not duplicated');
-  assert.equal(text(primaryButton(row)), 'Re-authenticate with scopes');
+  assert.equal(authChip(row).props['aria-label'], 'Authenticate: trypost', 'the status chip is the auth action');
 
   // Workspace rows carry the same data top-level and follow the same locale.
   app.setLocale('zh');
   row = renderRow(workspaceNode);
   assert.match(text(row), /权限范围不足：令牌缺少所需的 scope \(posts:write\)。/);
-  assert.equal(text(primaryButton(row)), '重新认证并授予权限');
+  assert.equal(authChip(row).props['aria-label'], '去认证: ws-trypost');
 
   app.setLocale('en');
   row = renderRow(expanded);
@@ -347,10 +355,12 @@ it('offers a per-workspace enable switch for global and workspace-local servers'
   const workspaceSwitch = (rendered, name) => nodes(rendered).find((node) => node.type === 'button'
     && node.props?.className === 'mm_switch' && node.props['aria-label'] === `Enabled in this workspace: ${name}`);
 
-  // A disabled workspace-local server still renders its row, dimmed with an
-  // explicit explanation, and the switch re-enables it through the new endpoint.
+  // A disabled workspace-local server still renders its row, dimmed, with the
+  // switch label reporting the state; the switch re-enables it.
   let row = renderRow(localNode);
-  assert.match(text(row), /Disabled in this workspace/);
+  assert.match(text(row), /Disabled/);
+  const rowLabels = nodes(row).filter((node) => node.type === 'button').map(text);
+  assert.ok(rowLabels.includes('Edit') && rowLabels.includes('Delete'), 'workspace rows expose direct actions');
   const localSwitch = workspaceSwitch(row, 'local');
   assert.equal(localSwitch.props['data-on'], undefined, 'the switch is off');
   assert.equal(localSwitch.props['aria-checked'], false);
@@ -372,7 +382,40 @@ it('offers a per-workspace enable switch for global and workspace-local servers'
   await new Promise((resolve) => setImmediate(resolve));
 });
 
-it('shows the effective redirect URI with a copy action and a pending-registration cue', async () => {
+it('makes the needs-auth status chip the authentication action', async () => {
+  const calls = [];
+  const needsAuth = { id: 'srv-chip', name: 'needs', type: 'http', url: 'https://x.test/mcp', authMode: 'oauth', status: 'needs-auth', error: '', toolCount: 0, enabled: true };
+  const connected = { id: 'srv-ok', name: 'ok', type: 'http', url: 'https://x.test/mcp', authMode: 'oauth', status: 'connected', error: '', toolCount: 2, enabled: true };
+  const app = mount(async (url, options = {}) => {
+    calls.push({ url, options });
+    if (url.endsWith('/servers')) return response({ servers: [needsAuth, connected] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  let tree = app.render();
+  app.effects(); await settle();
+  tree = app.render();
+  const chipRow = nodes(tree).find((node) => node.props?.server?.id === 'srv-chip');
+  const okRow = nodes(tree).find((node) => node.props?.server?.id === 'srv-ok');
+
+  app.reset();
+  const chipCard = app.render(chipRow.type, chipRow.props);
+  const chip = nodes(chipCard).find((node) => node.type === 'button' && String(node.props.className).includes('mm_badge auth'));
+  assert.ok(chip, 'the needs-auth badge is a button');
+  assert.equal(text(chip), 'Authentication required');
+  assert.equal(chip.props['aria-label'], 'Authenticate: needs');
+  chip.props.onClick();
+  await settle();
+  assert.ok(calls.some((call) => call.url.endsWith('/servers/srv-chip/auth')), 'clicking the chip starts the authorization');
+
+  app.reset();
+  const okCard = app.render(okRow.type, okRow.props);
+  assert.ok(!nodes(okCard).some((node) => node.type === 'button' && String(node.props.className).includes('mm_badge auth')),
+    'a connected server has no authentication chip');
+});
+
+it('shows the effective redirect URI in the editor, not on the card', async () => {
   const server = {
     id: 'srv-redirect', name: 'figma', type: 'http', url: 'https://mcp.figma.com/mcp',
     authMode: 'oauth', status: 'needs-auth', error: '', toolCount: 0, enabled: true,
@@ -391,26 +434,29 @@ it('shows the effective redirect URI with a copy action and a pending-registrati
   tree = app.render();
   const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-redirect');
   assert.ok(cardNode, 'the server card renders');
+
+  // The editor is where the effective URI, the pending cue and the copy live.
+  cardNode.props.onEdit();
+  tree = app.render();
+  const formEl = content(tree);
+  app.reset();
+  const form = app.render(formEl.type, formEl.props);
+  const detailsEl = nodes(form).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-redirect');
+  assert.ok(detailsEl, 'the editor renders the redirect details');
+  const details = app.render(detailsEl.type, detailsEl.props);
+  assert.match(text(details), /http:\/\/localhost:49593\/callback/);
+  assert.match(text(details), /Registration pending/);
+  assert.ok(nodes(details).some((node) => typeof node.type === 'function' && node.props?.value === server.redirectUri),
+    'the copy action carries the effective URI');
+
+  // The card body no longer repeats the transport endpoint or the redirect URI.
   app.reset();
   const card = app.render(cardNode.type, { ...cardNode.props, open: true });
-  const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-redirect');
-  assert.ok(redirectEl, 'the effective URI element renders on the card');
-  const redirect = app.render(redirectEl.type, redirectEl.props);
-  assert.match(text(redirect), /http:\/\/localhost:49593\/callback/, 'the effective URI is shown');
-  assert.match(text(redirect), /Registration pending/);
-  const copy = nodes(redirect).find((node) => node.type === 'button' && text(node) === 'Copy');
-  assert.ok(copy, 'the URI can be copied');
-  assert.equal(typeof copy.props.onClick, 'function');
-
-  // Edit and Delete no longer sit on the card: they live behind the menu, so
-  // the action row cannot overflow.
-  const buttonLabels = nodes(card).filter((node) => node.type === 'button').map(text);
-  assert.ok(!buttonLabels.includes('Edit'), 'Edit moved into the menu');
-  assert.ok(!buttonLabels.includes('Delete'), 'Delete moved into the menu');
-  assert.ok(nodes(card).some((node) => typeof node.type === 'function' && node.props?.onEdit && node.props?.onDelete && node.props?.t), 'the actions live in a menu element');
+  assert.doesNotMatch(text(card), /49593\/callback/);
+  assert.doesNotMatch(text(card), /OAuth ·/);
 });
 
-it('opens the action menu with Edit and Delete and reports its state', async () => {
+it('exposes Edit and Delete directly on the expanded card with a confirmation', async () => {
   const server = { id: 'srv-menu', name: 'sentry', type: 'http', url: 'https://mcp.sentry.dev/mcp', authMode: 'oauth', status: 'connected', error: '', toolCount: 2, enabled: true };
   const app = mount(async (url) => {
     if (url.endsWith('/servers')) return response({ servers: [server] });
@@ -422,48 +468,33 @@ it('opens the action menu with Edit and Delete and reports its state', async () 
   app.effects(); await settle();
   tree = app.render();
   const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-menu');
+
+  // The card starts collapsed: its actions appear only when it is opened.
   app.reset();
-  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
-  const menuEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.onEdit && node.props?.onDelete && node.props?.t);
-  assert.ok(menuEl, 'the menu element renders');
+  const collapsed = app.render(cardNode.type, { ...cardNode.props, open: false });
+  const collapsedLabels = nodes(collapsed).filter((node) => node.type === 'button').map(text);
+  assert.ok(!collapsedLabels.includes('Edit'), 'a collapsed card shows no actions');
+  assert.ok(!collapsedLabels.includes('Delete'));
 
   let edited = 0;
-  let deleted = 0;
-  const props = { ...menuEl.props, onEdit: () => { edited += 1; }, onDelete: () => { deleted += 1; } };
   app.reset();
-  let menu = app.render(menuEl.type, props);
-  let toggle = nodes(menu).find((node) => node.props['aria-haspopup'] === 'menu');
-  assert.equal(toggle.props['aria-expanded'], false);
-  assert.equal(toggle.props['aria-label'], 'More actions');
-  assert.ok(!nodes(menu).some((node) => node.props.role === 'menuitem'), 'the menu is closed');
-
-  toggle.props.onClick();
-  menu = app.render(menuEl.type, props);
-  toggle = nodes(menu).find((node) => node.props['aria-haspopup'] === 'menu');
-  assert.equal(toggle.props['aria-expanded'], true);
-  const items = nodes(menu).filter((node) => node.props.role === 'menuitem');
-  assert.deepEqual(items.map(text), ['Edit', 'Delete']);
-
-  items[0].props.onClick();
+  let card = app.render(cardNode.type, { ...cardNode.props, open: true, onEdit: () => { edited += 1; } });
+  const labels = nodes(card).filter((node) => node.type === 'button').map(text);
+  assert.ok(labels.includes('Edit'), 'Edit is a direct action');
+  assert.ok(labels.includes('Delete'), 'Delete is a direct action');
+  assert.match(text(card), /Enabled/, 'the switch label reports the state, not the action');
+  nodes(card).find((node) => node.type === 'button' && text(node) === 'Edit').props.onClick();
   assert.equal(edited, 1);
-  assert.equal(deleted, 0);
-  menu = app.render(menuEl.type, props);
-  assert.ok(!nodes(menu).some((node) => node.props.role === 'menuitem'), 'choosing an item closes the menu');
-  nodes(menu).find((node) => node.props['aria-haspopup'] === 'menu').props.onClick();
-  menu = app.render(menuEl.type, props);
-  nodes(menu).filter((node) => node.props.role === 'menuitem')[1].props.onClick();
-  assert.equal(deleted, 1);
 
-  // Escape closes it too; the wrapper carries an id so the document listener can
-  // tell a click inside this menu from a click outside it.
-  const wrap = app.render(menuEl.type, props);
-  nodes(wrap).find((node) => node.props['aria-haspopup'] === 'menu').props.onClick();
-  menu = app.render(menuEl.type, props);
-  const wrapNode = nodes(menu).find((node) => node.props.className === 'mm_menuWrap');
-  assert.ok(Number(wrapNode.props['data-menu-id']) >= 1, 'the menu carries its identity');
-  wrapNode.props.onKeyDown({ key: 'Escape' });
-  menu = app.render(menuEl.type, props);
-  assert.ok(!nodes(menu).some((node) => node.props.role === 'menuitem'), 'Escape closes the menu');
+  // Delete asks for confirmation instead of deleting immediately.
+  app.reset();
+  card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  nodes(card).find((node) => node.type === 'button' && text(node) === 'Delete').props.onClick();
+  card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  assert.match(text(card), /Delete \u201csentry\u201d\?/);
+  nodes(card).find((node) => node.type === 'button' && text(node) === 'Cancel').props.onClick();
+  card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  assert.doesNotMatch(text(card), /cannot be undone/);
 });
 
 it('copies the effective redirect URI verbatim and shows the copied state', async () => {
@@ -497,20 +528,28 @@ it('copies the effective redirect URI verbatim and shows the copied state', asyn
   app.effects(); await settle();
   tree = app.render();
   const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-copy');
-  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
-  const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-copy');
+  cardNode.props.onEdit();
+  tree = app.render();
+  const formEl = content(tree);
   app.reset();
-  let info = app.render(redirectEl.type, redirectEl.props);
-  const copy = nodes(info).find((node) => node.type === 'button' && text(node) === 'Copy');
-  copy.props.onClick();
-  info = app.render(redirectEl.type, redirectEl.props);
+  let form = app.render(formEl.type, formEl.props);
+  const detailsEl = nodes(form).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-copy');
+  const details = app.render(detailsEl.type, detailsEl.props);
+  const copyEl = nodes(details).find((node) => typeof node.type === 'function' && node.props?.value === server.redirectUri);
+  assert.ok(copyEl, 'the copy action renders');
+  // A fresh hook store: the harness shares one positional array across renders,
+  // so the nested component must not inherit a slot from the form above it.
+  app.reset();
+  let copy = app.render(copyEl.type, copyEl.props);
+  nodes(copy).find((node) => node.type === 'button' && text(node) === 'Copy').props.onClick();
+  copy = app.render(copyEl.type, copyEl.props);
 
   assert.equal(commands.length, 1);
   assert.equal(commands[0], 'copy');
   assert.equal(created.length, 1, 'one textarea is used for the copy');
   assert.equal(created[0].value, server.redirectUri, 'the clipboard payload is the effective URI');
   assert.equal(created[0].selected, true, 'the textarea is selected before copying');
-  assert.equal(text(nodes(info).find((node) => node.type === 'button' && node.props.className === 'mm_btn')), 'Copied');
+  assert.equal(text(nodes(copy).find((node) => node.type === 'button' && node.props.className === 'mm_btn')), 'Copied');
 });
 
 it('warns that a manual client id needs the provider allowlist update instead of re-registration', async () => {
@@ -724,14 +763,17 @@ it('shows the automatic notice for an override without a port on the card', asyn
   await settle();
   tree = app.render();
   const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-bare');
+  cardNode.props.onEdit();
+  tree = app.render();
+  const formEl = content(tree);
   app.reset();
-  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
-  const redirectEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-bare');
-  const redirect = app.render(redirectEl.type, redirectEl.props);
-  assert.match(text(redirect), /Port assigned at authentication/);
-  assert.match(text(redirect), /Last used redirect URI/);
-  assert.match(text(redirect), /http:\/\/localhost:3210\/callback/);
-  assert.match(text(redirect), /manual Client ID needs a fixed URI/);
+  const form = app.render(formEl.type, formEl.props);
+  const detailsEl = nodes(form).find((node) => typeof node.type === 'function' && node.props?.server?.id === 'srv-bare');
+  const details = app.render(detailsEl.type, detailsEl.props);
+  assert.match(text(details), /Port assigned at authentication/);
+  assert.match(text(details), /Last used redirect URI/);
+  assert.match(text(details), /http:\/\/localhost:3210\/callback/);
+  assert.match(text(details), /manual Client ID needs a fixed URI/);
 });
 
 it('localizes the callback section in both languages', async () => {
