@@ -80,5 +80,5 @@
 
 - [x] 10.1 Run `npm test` and confirm every suite passes with no skipped or cancelled test; record the Node version and the pass count.
 - [x] 10.2 Run `openspec validate centralize-oauth-callback --strict` and confirm the change validates.
-- [ ] 10.3 Verify a real authorization round trip against an installed profile in a disposable `HOME`/`USERPROFILE`/`DSH_HOME` (`dsh plugin --profile web add <path>`, restart, authorize an HTTP OAuth server) and record the observed redirect URI and the fact that the listener released its port afterwards.
+- [x] 10.3 Verify a real authorization round trip against an installed profile in a disposable `HOME`/`USERPROFILE`/`DSH_HOME` (`dsh plugin --profile web add <path>`, restart, authorize an HTTP OAuth server) and record the observed redirect URI and the fact that the listener released its port afterwards. Done against DSH 0.2.1-rc.5 with a local fixture: the fixed redirect `http://localhost:49790/callback` completed end to end and the listener disappeared from `callbackStatus` afterwards; the operator also validated the rendered page.
 - [ ] 10.4 Verify a workspace-declared OAuth server authorizes through the same listener as a global server in that disposable profile, with no server id in the callback URL.

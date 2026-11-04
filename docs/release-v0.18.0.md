@@ -158,7 +158,15 @@ browser round trip was performed here.
   new suites.
 - `openspec validate centralize-oauth-callback --strict`: valid.
 
-Not verified here: a browser round trip against a real provider, binding an
-explicit fixed port in a running DSH profile, a Windows host's `::1` behavior,
-and the visual layout of the Advanced section in a live GUI. The IPv6 manager
-test skips automatically where `::1` cannot be bound.
+Also verified against a real DSH profile (not part of `npm test`): a disposable
+`HOME`/`USERPROFILE`/`DSH_HOME` with DSH `0.2.1-rc.5` and this plugin installed
+from the worktree. A server pinned to a fixed callback port completed a full
+authorization against a local OAuth fixture, with the redirect URI
+`http://localhost:49790/callback`; after completion that listener was gone from
+`callbackStatus`. The operator also validated the rendered Settings → MCP page
+(cards, actions, the Advanced section and the editor) in that profile.
+
+Not verified here: a round trip against a real external provider in a browser, a
+Windows host's `::1` behavior, and a workspace-declared server authorizing in a
+live profile (that needs an agent to load the workspace). The IPv6 manager test
+skips automatically where `::1` cannot be bound.
