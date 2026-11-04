@@ -592,3 +592,93 @@ it('cancels a pending workspace flow when the server is disabled in that workspa
   // The flow is gone, not waiting to resurrect a deliberately disabled server.
   await assert.rejects(() => deliverCallback(auth.json.authorizeUrl));
 });
+
+it('keeps each concurrent flow on its own registered client secret', async (t) => {
+  const stub = await startAuthorizationStub({ confidential: true });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const portA = await freePort();
+  const portB = await freePort();
+  const created = await request(handler, 'POST', '/mcp-manager/api/servers', {
+    name: 'confidential', type: 'http', url: stub.mcpUrl, authMode: 'oauth', redirectUrl: `http://localhost:${portA}`,
+  });
+  assert.equal(created.code, 201, created.text);
+  const id = created.json.server.id;
+
+  const first = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(first.code, 200, first.text);
+  const redirectA = redirectOf(first.json.authorizeUrl);
+  assert.equal(redirectA, `http://localhost:${portA}/callback`);
+  assert.equal(stub.registrations.length, 1);
+
+  // A second flow with a different redirect registers another client while the
+  // first flow is still pending, replacing the stored registration.
+  const edited = await request(handler, 'PUT', `/mcp-manager/api/servers/${id}`, {
+    name: 'confidential', type: 'http', url: stub.mcpUrl, authMode: 'oauth', redirectUrl: `http://localhost:${portB}`,
+  });
+  assert.equal(edited.code, 200, edited.text);
+  const second = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(second.code, 200, second.text);
+  const redirectB = redirectOf(second.json.authorizeUrl);
+  assert.equal(redirectB, `http://localhost:${portB}/callback`);
+  assert.equal(stub.registrations.length, 2, 'each redirect registers its own client');
+
+  assert.match((await deliverCallback(first.json.authorizeUrl)).text, /Authorized/);
+  assert.match((await deliverCallback(second.json.authorizeUrl)).text, /Authorized/);
+  const exchanges = stub.forms.filter((form) => form.get('grant_type') === 'authorization_code');
+  assert.equal(exchanges.length, 2);
+  const expected = new Map([['dcr-client-1', 'dcr-secret-1'], ['dcr-client-2', 'dcr-secret-2']]);
+  for (const form of exchanges) {
+    assert.equal(form.get('client_secret'), expected.get(form.get('client_id')),
+      'the exchange must not pair one client id with another client secret');
+  }
+  assert.deepEqual(exchanges.map((form) => form.get('redirect_uri')).sort(), [redirectA, redirectB].sort());
+
+  // The last completed flow owns the stored registration and token pair.
+  const stored = JSON.parse(readFileSync(statePath, 'utf8')).servers.find((server) => server.id === id);
+  assert.equal(stored.oauth.clientId, 'dcr-client-2');
+  assert.equal(stored.oauth.clientSecret, 'dcr-secret-2');
+  assert.equal(stored.oauth.redirect, redirectB);
+});
+
+it('redacts credential-looking text from a provider error page', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const id = await createServerFor(handler, stub, 'redacted-error');
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  const denied = await deliverCallback(auth.json.authorizeUrl, { error: 'access_denied&client_secret=SUPERSECRET' });
+  assert.match(denied.text, /access_denied/);
+  assert.ok(!denied.text.includes('SUPERSECRET'), 'a credential echoed by the provider must not reach the page');
+  assert.match(denied.text, /redacted/);
+});
+
+it('only links back to a loopback GUI from the callback page', async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+
+  const loopback = await createServerFor(handler, stub, 'loopback-link');
+  const localAuth = await request(handler, 'POST', `/mcp-manager/api/servers/${loopback}/auth`);
+  const localPage = await deliverCallback(localAuth.json.authorizeUrl);
+  assert.match(localPage.text, /href="http:\/\/127\.0\.0\.1:3080\/"/, 'the loopback GUI is linked');
+
+  const foreign = await createServerFor(handler, stub, 'foreign-link');
+  const foreignAuth = await request(handler, 'POST', `/mcp-manager/api/servers/${foreign}/auth`, undefined, { host: 'evil.example.com:3080' });
+  assert.equal(foreignAuth.code, 200, foreignAuth.text);
+  const foreignPage = await deliverCallback(foreignAuth.json.authorizeUrl);
+  assert.match(foreignPage.text, /Authorized/);
+  assert.ok(!foreignPage.text.includes('evil.example.com'), 'a foreign Host never becomes the back link');
+});
+
+it('rejects an authorization endpoint that is not an http(s) URL', async (t) => {
+  const stub = await startAuthorizationStub({ authorizationEndpoint: 'javascript:alert(1)' });
+  t.after(() => stub.close());
+  const { handler } = makeCtx();
+  const id = await createServerFor(handler, stub, 'bad-endpoint');
+  const auth = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`);
+  assert.equal(auth.code, 500, auth.text);
+  assert.match(auth.json.error, /not an http\(s\) URL/);
+  const status = (await request(handler, 'GET', '/mcp-manager/api/settings')).json.callbackStatus;
+  assert.deepEqual(status.listeners, [], 'a rejected endpoint must not leave a listener open');
+});

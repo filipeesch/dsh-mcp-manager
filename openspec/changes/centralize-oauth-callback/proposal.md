@@ -8,7 +8,7 @@ Authorization servers that pre-register redirect URIs make this a hard blocker: 
 
 ## What Changes
 
-- **New centralized callback subsystem** (`lib/oauth/*`): dedicated HTTP listeners bound to loopback only, started when an authorization starts, shared by every MCP connection with a compatible address, and stopped when no pending flow needs them.
+- **New centralized callback subsystem** (`lib/oauth/*`): dedicated HTTP listeners bound to loopback only, started when an authorization starts, shared by every MCP connection with a compatible address, and stopped when no pending flow needs them. The receiver no longer depends on the web interface; starting an authorization is still a settings/workspace API action, so a profile without a web interface has no trigger of its own.
 - Callback URL shape becomes `http://<loopback-host>:<port><path>` with no MCP identifier. The default path is `/callback`, configurable globally. Requests are routed to their authorization flow **only** by the OAuth `state` parameter.
 - **Authorization sessions keyed by `state`**, independently of server ids: concurrent flows for different servers and for the same server, single-use consumption, ten-minute expiry, and per-server isolation of client registration and tokens.
 - **Flexible redirect resolution** with one precedence order: per-server complete-URI override → global fixed configuration → automatic allocation. Automatic mode picks an available loopback port and presents `localhost` with `/callback`; fixed mode never changes the selected port silently.

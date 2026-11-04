@@ -91,9 +91,11 @@ export async function canBindIPv6Loopback() {
  * protected-resource pointer, and the authorization server advertises RFC 7591
  * registration and a token endpoint. Records every registration and form.
  */
-export async function startAuthorizationStub({ failToken = false } = {}) {
+export async function startAuthorizationStub({ failToken = false, confidential = false, authorizationEndpoint = '' } = {}) {
   const forms = [];
   const registrations = [];
+  /** client_id -> client_secret issued by a confidential registration */
+  const clientSecrets = new Map();
   const revoked = new Set();
   let issued = 0;
   const server = createServer((req, res) => {
@@ -127,10 +129,11 @@ export async function startAuthorizationStub({ failToken = false } = {}) {
       if (req.url === '/.well-known/oauth-authorization-server') {
         return send(200, {
           issuer: base,
-          authorization_endpoint: `${base}/authorize`,
+          authorization_endpoint: authorizationEndpoint || `${base}/authorize`,
           token_endpoint: `${base}/token`,
           registration_endpoint: `${base}/register`,
           code_challenge_methods_supported: ['S256'],
+          ...(confidential ? { token_endpoint_auth_methods_supported: ['client_secret_post'] } : {}),
         });
       }
       if (req.url === '/register') {
@@ -140,10 +143,27 @@ export async function startAuthorizationStub({ failToken = false } = {}) {
         if (!Array.isArray(payload.redirect_uris) || payload.redirect_uris.length === 0) {
           return send(400, { error: 'invalid_client_metadata' });
         }
-        return send(201, { client_id: `dcr-client-${registrations.length}`, redirect_uris: payload.redirect_uris });
+        const clientId = `dcr-client-${registrations.length}`;
+        if (confidential && payload.token_endpoint_auth_method === 'client_secret_post') {
+          const secret = `dcr-secret-${registrations.length}`;
+          clientSecrets.set(clientId, secret);
+          return send(201, { client_id: clientId, client_secret: secret, redirect_uris: payload.redirect_uris });
+        }
+        return send(201, { client_id: clientId, redirect_uris: payload.redirect_uris });
       }
       if (req.url === '/token') {
-        forms.push(new URLSearchParams(raw));
+        const form = new URLSearchParams(raw);
+        forms.push(form);
+        // A confidential client must present the secret issued by its own
+        // registration: mixing two clients' id and secret is rejected here, the
+        // way a strict authorization server would reject it.
+        const expectedSecret = clientSecrets.get(form.get('client_id') ?? '');
+        if (expectedSecret && form.get('client_secret') !== expectedSecret) {
+          return send(400, { error: 'invalid_client', error_description: 'client_secret does not match the registered client' });
+        }
+        if (!expectedSecret && form.get('client_secret')) {
+          return send(400, { error: 'invalid_client', error_description: 'unexpected client_secret' });
+        }
         if (failToken) return send(400, { error: 'invalid_grant', error_description: 'code expired' });
         issued += 1;
         return send(200, { access_token: `access-${issued}`, refresh_token: `refresh-${issued}`, token_type: 'bearer', expires_in: 3600 });

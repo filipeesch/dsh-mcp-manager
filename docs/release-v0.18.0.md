@@ -117,7 +117,7 @@ Verified on macOS arm64 (darwin) with Node v24.21.0, using disposable
 `HOME`/`USERPROFILE`/`DSH_HOME` paths and loopback fixtures. No real provider or
 browser round trip was performed here.
 
-- `npm test`: **330 passed, 0 failed, 0 cancelled, 0 skipped**
+- `npm test`: **335 passed, 0 failed, 0 cancelled, 0 skipped**
   (`duration_ms` ≈ 75 s).
 - New suites:
   - `test/oauth-callback-manager.test.js` — automatic allocation and port
@@ -143,8 +143,10 @@ browser round trip was performed here.
     plus the global configuration (defaults, persistence, every rejection, a
     hand-edited invalid value, the cleared listener error), the view fields for
     automatic/fixed/override/manual-client, a rejected per-server save, a failed
-    exchange releasing its port, and a disabled workspace server cancelling its
-    pending flow.
+    exchange releasing its port, a disabled workspace server cancelling its
+    pending flow, two concurrent confidential flows keeping their own client
+    secret, provider-error redaction, the loopback-only back link and a rejected
+    non-http(s) authorization endpoint.
 - Migrated suites: `test/oauth-discovery.test.js` now asserts the callback shape
   and that a loopback registration is always `native`; `test/oauth-scope.test.js`
   and `test/oauth-dcr-client-name.test.js` deliver real callbacks;
