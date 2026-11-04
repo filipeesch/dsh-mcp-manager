@@ -11,11 +11,23 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **OAuth (authorization code + PKCE)** with spec-compliant discovery, RFC 7591 dynamic client registration, `refresh_token` rotation, and auto-reconnect across restarts — one browser login, then it keeps working.
   - **Registration identity and secret** (RFC 7591): the `client_name` sent to the registration endpoint is `dsh-mcp-manager-<server>` by default and configurable per server (**Client name**) for providers that gate registration on an exact name. When the authorization server advertises `client_secret_post`, the client registers confidentially: the issued `client_secret` is stored in the 0600 state file and sent on token exchange and refresh (never in a view, response or log). For a dynamically registered client, a changed client name — or a new GUI origin — re-registers and drops the old client's tokens; a manually configured Client ID is unaffected.
   - **Client application type** follows MCP SEP-837: HTTP loopback callbacks (`localhost`, IPv4 loopback, or `[::1]`) register as `native`; other callbacks register as `web`. This avoids OIDC providers defaulting a local GUI to `web` and rejecting its redirect. Registration failures show the provider's OAuth error code when available; the Logs panel retains the detailed reason. Providers may still restrict which clients or redirects they accept.
-  - **Callback origin** accepts direct loopback `Host` values (including `[::1]:port`). Configure
+  - **Callback origin** accepts direct loopback `Host` values (including `[::1]:port`); a `localhost`
+    request is normalized to `127.0.0.1`, so the derived default always names a loopback address. Configure
     `publicOrigins` for a reverse proxy: one configured origin is the default callback even without
     forwarded headers; with multiple origins, a complete `X-Forwarded-Proto`/`X-Forwarded-Host` pair
     must match the allowlist. A foreign direct Host is rejected when no default is configured.
     Malformed forwarded host values are rejected. Callback messages are HTML-escaped.
+  - **Redirect URL override** (v0.17.0): a per-server **Redirect URL** replaces that default callback
+    origin for every flow of that server — the case it exists for is an authorization server that only
+    accepts `localhost` while the GUI is reached through `127.0.0.1`. It takes `host`, `host:port` or
+    `scheme://host[:port]`; the callback path is fixed. An omitted port follows the port the GUI is
+    reached on locally (the loopback `Host` port, or the listening port behind a proxy), so the value
+    survives a restart that picks a different one. Only a loopback host or an origin listed
+    in `publicOrigins` is accepted (`https` on loopback needs `publicOrigins`, because the receiver is
+    plain HTTP). The URI resolved when an authorization starts is replayed verbatim at the token
+    exchange. Saving a new value never drops the current session: the card shows the effective URI with
+    a copy action plus a *registration pending* note, and the next Authenticate re-registers the client
+    for the new exact redirect. See [OAuth redirect URL](#oauth-redirect-url).
   - **Discovery** follows RFC 9728 → RFC 8414: the MCP endpoint's 401 `WWW-Authenticate` header names its protected-resource metadata, that document names the authorization server, and the authorization server's metadata is read from the RFC 8414 path-inserted URL (e.g. `https://github.com/.well-known/oauth-authorization-server/login/oauth`). Only when nothing is discoverable does it fall back to guessing `${origin}/oauth/*`, and the attempt log says so.
   - **RFC 8707 `resource`** taken from the protected-resource document and sent on authorize, token
     exchange and refresh. A server that binds tokens to an audience (Kontrcheck's connector does)
@@ -24,7 +36,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
   - **Manual client credentials** for authorization servers that do not support dynamic registration (GitHub's does not): set **Client ID** to an app you registered with the provider, optionally a **Client secret environment variable** name (sent as `client_secret`; the secret itself is never persisted), and a **Scopes** string. When the provider only accepts pre-approved `client_name` values, set **Client name** rather than letting the default through.
   - **Scope selection** (MCP authorization spec): the authorize request carries `scope` from, in order, the **Scopes** field (or a hand-edited `oauth.scope` in `~/.dsh/mcp-manager.json`), the `scope` in the server's 401 `WWW-Authenticate` challenge, the protected-resource metadata's `scopes_supported` (RFC 9728), then the authorization server's `scopes_supported` (RFC 8414). When none is advertised no scope is sent. `resource=<MCP server URL>` (RFC 8707) goes on both the authorize and token requests whenever the protected-resource metadata names it.
   - **Insufficient scope**: when an authenticated request gets `403` or `WWW-Authenticate: Bearer error="insufficient_scope", scope="…"`, the server shows *Insufficient scope (scopes)* instead of the raw `initialize HTTP 403`, and offers a **Re-authenticate with scopes** button. The next authorization adds the scopes the server asked for. (On a single `tools/call`, only an explicit `insufficient_scope` triggers this; a bare 403 there is treated as that tool's own denial.)
-  - **External edits**: every write re-reads `~/.dsh/mcp-manager.json` under a file lock and merges field by field, so hand edits made while DSH runs are kept. Starting an authorization also re-reads a global server's `scope` / `clientId` / `clientSecretEnv` / `clientName` / `oauth.scope` from disk (workspace servers take those fields from the workspace `mcp.json`).
+  - **External edits**: every write re-reads `~/.dsh/mcp-manager.json` under a file lock and merges field by field, so hand edits made while DSH runs are kept. Starting an authorization also re-reads a global server's `scope` / `clientId` / `clientSecretEnv` / `clientName` / `redirectUrl` / `oauth.scope` from disk (workspace servers take those fields from the workspace `mcp.json`).
 - **Static Bearer token** mode for servers without OAuth — stored as an environment-variable **name** (Codex-style `tokenEnv`), never as plaintext in the config.
 - **No auth** mode for servers that need no credentials at all (e.g. a local `http://127.0.0.1:9316/mcp`) — the plugin sends no `Authorization` header and connects on save.
 - **Custom HTTP headers** (`headers` for direct values, `headerEnv` for values read from environment variables) — matches Codex's `http_headers` / `env_http_headers`.
@@ -63,14 +75,53 @@ Then restart `dsh --profile web` and refresh the page. The package declares a `d
 1. Open **Settings → MCP** in the DSH web UI.
 2. **＋ Add MCP server** (and later **编辑 / Edit** to change it):
    - **Scope (作用域)**: `user` — a global server available in every workspace; or `workspace` — a server bound to one workspace (its config lives in that workspace's `.dsh/dshmm/mcp.json`). Pick the workspace from the second dropdown.
-   - **HTTP**: name (becomes the `mcp__<name>__*` prefix), URL, auth mode (OAuth, static token, or no auth), and optional headers (`headers` direct values, `headerEnv` values read from env vars). In OAuth mode you can additionally pre-register the client: **Client ID**, **Client secret environment variable**, and **Scopes** (all optional; leave Scopes empty to use what the server advertises). **Client name** sets the `client_name` used for dynamic registration (default `dsh-mcp-manager-<name>`) — needed when the provider only registers pre-approved names.
+   - **HTTP**: name (becomes the `mcp__<name>__*` prefix), URL, auth mode (OAuth, static token, or no auth), and optional headers (`headers` direct values, `headerEnv` values read from env vars). In OAuth mode you can additionally pre-register the client: **Client ID**, **Client secret environment variable**, and **Scopes** (all optional; leave Scopes empty to use what the server advertises). **Client name** sets the `client_name` used for dynamic registration (default `dsh-mcp-manager-<name>`) — needed when the provider only registers pre-approved names. **Redirect URL** (optional) overrides the callback origin; see [OAuth redirect URL](#oauth-redirect-url).
    - **stdio**: name, command (e.g. `npx`), args (one per row), env vars (key/value rows), and optional working directory.
-3. OAuth servers: click **去认证 (Authenticate)** → the browser opens the server's login page → after consent you are redirected back and the tools are registered immediately. If the authorization server advertises a `registration_endpoint` the plugin registers itself (RFC 7591) and you can leave Client ID empty. If it does not — GitHub's `https://github.com/login/oauth` is the common case — register an OAuth App with the provider, paste its **Client ID** (and the **name of the environment variable** holding its secret, if it is a confidential client), set **Scopes** to what the MCP endpoint needs (e.g. `repo read:org`), and whitelist `http://127.0.0.1:<port>/mcp-manager/callback/<id>` as the redirect URI there. Without a Client ID the attempt fails with an explanation rather than a bare `HTTP 404`, and the **Logs** panel lists every URL that was tried.
+3. OAuth servers: click **去认证 (Authenticate)** → the browser opens the server's login page → after consent you are redirected back and the tools are registered immediately. If the authorization server advertises a `registration_endpoint` the plugin registers itself (RFC 7591) and you can leave Client ID empty. If it does not — GitHub's `https://github.com/login/oauth` is the common case — register an OAuth App with the provider, paste its **Client ID** (and the **name of the environment variable** holding its secret, if it is a confidential client), set **Scopes** to what the MCP endpoint needs (e.g. `repo read:org`), and whitelist the redirect URI that the server card shows (label **Redirect URI**, with a copy button) — `http://127.0.0.1:<port>/mcp-manager/callback/<id>` by default, or the server's Redirect URL override — as the redirect URI there. Without a Client ID the attempt fails with an explanation rather than a bare `HTTP 404`, and the **Logs** panel lists every URL that was tried.
 4. Static-token servers: enter the **name of an environment variable** that holds the token (e.g. `MCP_BEARER_TOKEN`) — the token itself is never written to disk; stdio servers spawn and connect immediately on save.
 5. No-auth servers: pick **No auth (server needs no credentials)** — the plugin sends no `Authorization` header and connects on save. Use it for an endpoint that authenticates nothing (for example a local `http://127.0.0.1:9316/mcp`).
 6. Optional: turn on **On-demand MCP tool calls** at the top of the page. The setting is profile-wide, persists across restarts, and affects existing sessions on their next request.
 
-Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Buttons: authenticate, edit, enable/disable (switch), delete. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed, and the expanded card offers **日志 / Logs**. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile; the workspace view's per-row switch turns a server off for one workspace only. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
+Status badges: `connected (N tools)` / `needs-auth` / `authorizing` / `error` / `disabled`. Actions: enable/disable (switch), authenticate, and a `⋯` menu holding Edit and Delete. The action row wraps and the card grid collapses to one column instead of overflowing the card (measured through the CSS, not in a running profile — see the release notes). An OAuth card shows its effective **Redirect URI** with a copy action. A non-empty error is also shown as a one-line summary under the server name while the card is collapsed, and the expanded card offers **日志 / Logs**. **Disable** unregisters that server's tools and drops its connection (config and OAuth tokens persist); **Enable** reconnects without re-authenticating. Disabled servers stay dormant across restarts. The toggle is global: it affects every session in this profile; the workspace view's per-row switch turns a server off for one workspace only. State persists at `~/.dsh/mcp-manager.json` (server configs + OAuth client registrations + tokens; static tokens are referenced by env-var name, not stored).
+
+### OAuth redirect URL
+
+The plugin builds the OAuth callback as `<origin>/mcp-manager/callback/<server-id>`. By default the
+origin is the loopback address the GUI is reached on (`localhost` is normalized to `127.0.0.1`), or the
+configured `publicOrigins` origin when there is one. Some authorization servers only accept a specific
+loopback host — `localhost` instead of `127.0.0.1`, for example — and those servers cannot be
+authenticated without a way to say so.
+
+Set **Redirect URL** in the OAuth section of the add/edit form (or `redirectUrl` in
+`<workspace>/.dsh/dshmm/mcp.json` for a workspace server) to replace the origin for that server:
+
+| Value | Effective redirect |
+|---|---|
+| `localhost` | `http://localhost:<current GUI port>/mcp-manager/callback/<id>` |
+| `localhost:8080` | `http://localhost:8080/mcp-manager/callback/<id>` |
+| `https://relay.example.com` | `https://relay.example.com/mcp-manager/callback/<id>` |
+
+- The callback **path** is always the plugin's; a value carrying a path, query, fragment or credentials
+  is rejected.
+- An omitted port inherits the port the GUI is reached on locally — the `Host` port for a loopback
+  request, or the listening port when a proxy forwarded the request — so `localhost` keeps working when
+  DSH restarts on another port. An explicit port is used verbatim — it must be something that actually
+  forwards to the GUI (a reverse proxy or a port mapping), otherwise the browser cannot deliver the code.
+- Accepted hosts: loopback (`localhost`, the IPv4 loopback range `127.0.0.0/8`, or `::1`) or an origin listed in
+  `config.publicOrigins`. `https` on a loopback host is rejected unless it is listed there, because the
+  plugin's callback receiver is plain HTTP.
+- The resolved URI is fixed when the authorization starts and replayed at the token exchange, so a
+  callback that arrives through a proxy or another host still exchanges correctly.
+- Saving a new value keeps the current session: the card shows the effective URI, a copy action and a
+  *registration pending* note, and the next **Authenticate** re-registers a dynamically registered
+  client for the new exact redirect (the previous client's tokens are discarded then, not on save). A
+  manually configured Client ID is never re-registered — whitelist the new URI at the provider yourself.
+
+**Upgrading from 0.16.x:** a request addressed to `localhost` now yields the loopback IP
+(`http://127.0.0.1:<port>/...`) instead of `http://localhost:<port>/...`. If your provider allowlists
+only `localhost`, set **Redirect URL** to `localhost` (or `localhost:<port>`) after upgrading. The
+existing registration keeps refreshing until you authenticate again; the first authentication after
+the change registers the client again for the new URI.
 
 ### Tool-call timeouts
 
@@ -172,6 +223,7 @@ attempts cannot restore tools or clear a newer connection.
 | Piece | Mechanism |
 |---|---|
 | Settings page | Client half registers a `settings.section` slot entry (MCP tab) |
+| Redirect URI | Resolved in one place: the per-server override, or the derived default (loopback IP, or the configured public origin). The value is fixed when an authorization starts and replayed at the token exchange, never re-derived from the callback request |
 | OAuth flow | Host half discovers the authorization server (RFC 9728 protected-resource metadata → RFC 8414 authorization-server metadata), then does dynamic client registration (or uses a manually configured Client ID) + PKCE; the redirect lands on a route mounted on the DSH GUI webserver itself |
 | OAuth discovery | The MCP endpoint's 401 `WWW-Authenticate` is parsed for `resource_metadata`, which is cached on the server; resource metadata names the authorization server, whose metadata is fetched from the RFC 8414 path-inserted well-known URL (plus an OpenID-configuration and origin-level probe). Guessed `${origin}/oauth/*` endpoints are a last resort, tagged as a fallback |
 | Diagnostics | A per-server in-memory ring buffer (last 20 entries) records discovery/register/authorize/token/initialize/tools-list/stdio phases with URL + HTTP status, exposed at `GET /mcp-manager/api/servers/:id/logs`; entries are redacted on write and never persisted (a log file would be a new secret-at-rest surface) |
@@ -194,7 +246,7 @@ attempts cannot restore tools or clear a newer connection.
 Releases are immutable and tagged, so consumers can pin one:
 
 ```sh
-npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.16.2
+npx -p @deepseek-ai/dsh dsh plugin --profile web add github:hyqhyq3/dsh-mcp-manager#v0.17.0
 ```
 
 The DSH STORE catalog additionally pins a full 40-character commit instead of a floating branch (release 0.12.0 = `b029407ca3d258e83abac6c06ff94f92e5687164`; the store re-pins the newest release after each push).
@@ -277,6 +329,16 @@ DSH compatibility matrix.
 
 For v0.16.2 / issue #30, regression coverage lives in `test/transport-redaction.test.js`: a loopback MCP server echoes long synthetic credentials in JSON and free-form errors, including initialization, tool calls, scope failures and tool-list refresh warnings. `node scripts/verify-transport-redaction-dsh.mjs <DSH-prefix>` also checks a keyless snapshot through a real DSH Loader, web API and structured host logger. Redaction recognizes credential fields and Bearer values; it does not identify arbitrary unlabeled secrets. See [v0.16.2 verification](docs/release-v0.16.2.md) for results and limits.
 
+For v0.17.0, `test/redirect-url.test.js` covers the derived default (including the `localhost` → `127.0.0.1`
+normalization and a configured public origin used verbatim), the override (bare host inheriting the port,
+explicit port and scheme, re-registration when the port changes), validation (non-allowlisted host, path,
+credentials, non-http scheme, `https` on loopback), the pinned URI at the token exchange with a callback
+addressed to another host, the save-then-re-register lifecycle, a manual Client ID that never registers,
+a hand-edited state file, and workspace entries (override used, preserved by a partial edit, reloaded
+after a hand edit). The client stub test covers the redirect field with its effective-default placeholder
+and reset action, the effective URI with copy, the pending-registration cue, and the `⋯` menu that keeps
+Edit/Delete off the card. See [v0.17.0 verification](docs/release-v0.17.0.md).
+
 Next gate: a real-profile readback (resolved version, running process, visible Settings → MCP page) plus, for distribution, an unauthenticated readback of the tagged artifacts. Until those are recorded, read the compatibility declarations as disposable-profile verification only — not as proof of a live installation. The same applies to listing status on DSH STORE.
 
 For v0.14.0, `test/tool-timeout.test.js` covers budget validation, large-timer
@@ -296,7 +358,7 @@ remaining platform boundaries. This does not expand the compatibility matrix.
 - On-demand filtering targets `native` presentation. Code/PTC/both agents keep the full session-visible MCP catalog; their presentation is read from the executor's prompt sections (and, on harnesses that still supply one, from the waterfall payload). Exported SDK renderers provide no presentation-only catalog contract; see the [interface evidence and fallbacks](docs/on-demand-code-mode.md). Full SDK compression remains open in [#18](https://github.com/hyqhyq3/dsh-mcp-manager/issues/18).
 - OAuth tokens live in a plain JSON file under `~/.dsh` — treat the file as a secret. Static bearer tokens and `headerEnv` values are read from environment variables and never persisted. Workspace OAuth tokens live in the same state file, never in the workspace's `mcp.json`.
 - stdio servers run as long-lived child processes tied to the plugin lifecycle. On POSIX `args` are whitespace-tokenized (quotes protect args with spaces) with no shell expansion; on Windows the command line is passed to `cmd.exe`, so shell metacharacters (`&`, `|`, `>`, `%VAR%`) are interpreted — the command and any argument containing whitespace are quoted automatically (already-quoted values are left as-is), but prefer absolute paths.
-- One OAuth client registration per server per GUI origin; moving the GUI to a new origin re-registers automatically on the next login, and changing the configured **Client name** re-registers with the new name (the old client's tokens are dropped, so a re-authorization is required). A manually configured Client ID is never re-registered — its redirect URI must already be whitelisted with the provider, so a GUI origin change shows up as a provider-side redirect error rather than an automatic fix.
+- One OAuth client registration per server per redirect URI; moving the GUI to a new origin (or changing **Redirect URL**) re-registers automatically on the next login, and changing the configured **Client name** re-registers with the new name (a re-registration drops the old client's tokens, so a re-authorization is required then). Saving a **Redirect URL** alone never signs a server out. A manually configured Client ID is never re-registered — its redirect URI must already be whitelisted with the provider, so a GUI origin change shows up as a provider-side redirect error rather than an automatic fix.
 - Attempt logs are in-memory on the host: they survive a browser refresh but not a DSH restart, and they are capped at 20 entries per server. The durable record remains the DSH server log (`ctx.logger`); the plugin deliberately writes no log file.
 - The manual OAuth fields are validated but not proven against a live provider here — `client_secret_post` is the only supported client authentication method (no `client_secret_basic`). Some providers (Meta, Figma) gate dynamic registration on a `client_name` allowlist; setting **Client name** is the supported path, but the plugin deliberately does not ship another product's name as a default. A registration-issued `client_secret` is stored in `~/.dsh/mcp-manager.json` (0600) like the tokens; it is never returned by the API or written to a log, and it is presented only by a registration that asked for `client_secret_post` — never with a manual Client ID.
 

@@ -228,7 +228,9 @@ it('issue #21: strict native registration completes PKCE, connects, and reuses o
   const changed = await request(handler, 'POST', `/mcp-manager/api/servers/${id}/auth`, undefined, { host: 'localhost:3081' });
   assert.equal(changed.code, 200, changed.text);
   assert.equal(stub.registrations.length, 2, 'changing origin requires registration for the new exact redirect');
-  assert.deepEqual(stub.registrations[1].redirect_uris, [`http://localhost:3081/mcp-manager/callback/${id}`]);
+  // A request-derived default names the loopback IP, so a `localhost` Host
+  // becomes 127.0.0.1 while the port the browser used is kept.
+  assert.deepEqual(stub.registrations[1].redirect_uris, [`http://127.0.0.1:3081/mcp-manager/callback/${id}`]);
 });
 
 it('issue #21: reports a provider metadata rejection without assuming DCR is unsupported or retrying it', async (t) => {
