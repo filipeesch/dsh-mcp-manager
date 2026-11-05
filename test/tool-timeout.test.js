@@ -24,6 +24,7 @@ function mount(t, config = {}) {
   const effect = fn => { const dispose = fn(); if (typeof dispose === 'function') cleanup.push(dispose); return () => {}; };
   const registry = {
     register: definition => { tools.set(definition.name, definition); return () => tools.delete(definition.name); },
+    guard: () => () => {},
     restrict: () => () => {}, schemas: () => [], get: () => undefined, execute: async () => ({}),
   };
   const agent = { session: { header: { cwd: workspace } }, ctx: { tools: registry } };

@@ -648,7 +648,7 @@ it('review: a settings save cannot restore a stale token pair', async t => {
   writeState({ servers: [seedServer(stub, 'config')] });
   const { handler } = makeCtx();
   const fresh = state(); fresh.servers[0].oauth.tokens.refresh_token = 'rotated'; writeState(fresh);
-  const result = await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
+  const result = await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false });
   assert.equal(result.code, 200, result.text);
   assert.equal(serverNamed('config').oauth.tokens.refresh_token, 'rotated');
 });
@@ -705,13 +705,13 @@ it('review: a concurrent settings writer waits for refresh and preserves workspa
   const pending = request(refreshing.handler, 'POST', '/mcp-manager/api/servers/locked/enabled', { enabled: true });
   await untilReview(() => refreshForms(stub).length === 1);
   let settled = false;
-  const saving = request(settings.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
+  const saving = request(settings.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false }).then(result => { settled = true; return result; });
   await new Promise(resolve => setTimeout(resolve, 50));
   assert.equal(settled, false, 'config save must share the refresh lock');
   await pending; assert.equal((await saving).code, 200);
   assert.equal(serverNamed('locked').oauth.tokens.refresh_token, 'refresh-1');
   assert.equal(state().workspaceTokens['/scratch\nws'].oauth.tokens.refresh_token, 'ws-old');
-  assert.equal(state().onDemandToolInjection, true);
+  assert.equal(state().onDemandToolInjection, false);
 });
 
 for (const action of ['disable', 'delete', 'unload']) {
@@ -741,7 +741,7 @@ it('review: adopting a remote pair rebases later settings writes', async t => {
   const fresh = state(); fresh.servers[0].oauth.tokens = { access_token: 'example-access-n', refresh_token: 'example-refresh-n', expires_at: Date.now() + 3600_000 }; writeState(fresh);
   await request(h.handler, 'POST', '/mcp-manager/api/servers/rebase/enabled', { enabled: true });
   const later = state(); later.servers[0].oauth.tokens = { access_token: 'example-access-m', refresh_token: 'example-refresh-m', expires_at: Date.now() + 3600_000 }; writeState(later);
-  assert.equal((await request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true })).code, 200);
+  assert.equal((await request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false })).code, 200);
   assert.equal(serverNamed('rebase').oauth.tokens.refresh_token, 'example-refresh-m');
 });
 
@@ -750,9 +750,9 @@ it('review: an empty stale lock is reclaimable after interrupted creation', asyn
   const lock = `${statePath}.refresh.lock`;
   writeFileSync(lock, ''); utimesSync(lock, new Date(0), new Date(0));
   const { handler } = makeCtx();
-  const result = await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
+  const result = await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false });
   assert.equal(result.code, 200, result.text);
-  assert.equal(state().onDemandToolInjection, true);
+  assert.equal(state().onDemandToolInjection, false);
   assert.ok(!readdirSync(join(scratchHome, '.dsh')).includes('mcp-manager.json.refresh.lock'));
 });
 
@@ -761,7 +761,7 @@ it('review: an aged lock held by a live owner is never stolen', async () => {
   writeFileSync(lock, `${process.pid}\nowned`); utimesSync(lock, new Date(0), new Date(0));
   const { handler } = makeCtx();
   let settled = false;
-  const pending = request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
+  const pending = request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false }).then(result => { settled = true; return result; });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(settled, false);
   assert.equal(readFileSync(lock, 'utf8'), `${process.pid}\nowned`);
@@ -808,7 +808,7 @@ it('review: an orphaned reclaimer guard fails closed until operator recovery', a
   writeFileSync(guard, ''); utimesSync(guard, new Date(0), new Date(0));
   const { handler } = makeCtx();
   let settled = false;
-  const pending = request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true }).then(result => { settled = true; return result; });
+  const pending = request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false }).then(result => { settled = true; return result; });
   await new Promise(resolve => setTimeout(resolve, 100));
   assert.equal(settled, false);
   assert.equal(readFileSync(lock, 'utf8'), '');
@@ -820,15 +820,15 @@ it('premerge: queued state writes preserve same-process invocation order', async
   const lock = `${statePath}.refresh.lock`;
   writeFileSync(lock, `${process.pid}\nexternal-owner`);
   const h = makeCtx();
-  const first = request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
+  const first = request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false });
   await new Promise(resolve => setImmediate(resolve));
   const view = await request(h.handler, 'GET', '/mcp-manager/api/settings');
-  assert.equal(view.json.onDemandToolInjection, true, 'first write reached its lock wait');
+  assert.equal(view.json.onDemandToolInjection, false, 'first write reached its lock wait');
   unlinkSync(lock);
-  const second = request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false });
+  const second = request(h.handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true });
   assert.equal((await second).code, 200);
   assert.equal((await first).code, 200);
-  assert.equal(state().onDemandToolInjection, false, 'earlier queued save must not overwrite the later save');
+  assert.equal(state().onDemandToolInjection, true, 'earlier queued save must not overwrite the later save');
 });
 
 it('premerge: retrying disable after lock timeout persists the requested state', async t => {

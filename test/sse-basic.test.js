@@ -93,6 +93,7 @@ function mount(registered) {
     logger: { info() {}, warn() {}, error() {} },
     tools: {
       register(definition) { registered.set(definition.name, definition); return () => registered.delete(definition.name); },
+      guard: () => () => {},
       restrict: () => () => {},
       schemas: () => [],
       get: () => undefined,
@@ -138,7 +139,7 @@ describe('HTTP-with-SSE transport', () => {
     const { registered, dispose } = await loadWith({ name: 'sseSrv', type: 'http', url: fake.url, authMode: 'static', staticToken: TOKEN });
     t.after(dispose);
 
-    const connected = await waitFor(() => registered.size >= 2);
+    const connected = await waitFor(() => registered.has('mcp__sseSrv__proxy_history') && registered.has('mcp__sseSrv__burp_shutdown'));
     assert.equal(connected, true, `expected the SSE session to register tools; got [${[...registered.keys()].join(', ')}]`);
     assert.equal(registered.has('mcp__sseSrv__proxy_history'), true);
     assert.equal(registered.has('mcp__sseSrv__burp_shutdown'), true);
@@ -204,7 +205,7 @@ describe('HTTP-with-SSE transport', () => {
     const disposers = [];
     const ctx = {
       logger: { info: (m) => logged.push(m), warn: (m) => logged.push(m), error: (m) => logged.push(m) },
-      tools: { register: () => () => {}, restrict: () => () => {}, schemas: () => [], get: () => undefined, execute: async () => ({}) },
+      tools: { register: () => () => {}, guard: () => () => {}, restrict: () => () => {}, schemas: () => [], get: () => undefined, execute: async () => ({}) },
       webServer: { register: () => () => {} },
       get: () => undefined,
       on: () => () => {},
@@ -232,7 +233,7 @@ describe('HTTP-with-SSE transport', () => {
     const disposers = [];
     const ctx = {
       logger: { info: (m) => logged.push(m), warn: (m) => logged.push(m), error: (m) => logged.push(m) },
-      tools: { register: () => () => {}, restrict: () => () => {}, schemas: () => [], get: () => undefined, execute: async () => ({}) },
+      tools: { register: () => () => {}, guard: () => () => {}, restrict: () => () => {}, schemas: () => [], get: () => undefined, execute: async () => ({}) },
       webServer: { register: () => () => {} },
       get: () => undefined,
       on: () => () => {},

@@ -19,6 +19,7 @@ function makeAgent() {
     ctx: {
       tools: {
         register: () => () => {},
+        guard: () => () => {},
         restrict: () => () => {},
         schemas: () => [],
         get: () => undefined,
@@ -45,7 +46,7 @@ function mount(invoke) {
   const childCtx = { agents, effect: (fn) => { const dispose = fn(); if (typeof dispose === 'function') disposers.push(dispose); return () => {}; } };
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
-    tools: { register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
+    tools: { register: () => () => {}, guard: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
     webServer: { register: () => () => {} },
     get: () => undefined,
     on: () => () => {},
