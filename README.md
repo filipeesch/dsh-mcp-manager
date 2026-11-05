@@ -222,6 +222,72 @@ Global servers (added in **Settings → MCP**) are visible in every workspace. U
 Recovery regression tests run with `node --test test/workspace-reconnect.test.js`. For an opt-in real Loader smoke, install `@deepseek-ai/dsh@0.2.1-rc.2` into a disposable npm prefix, then run `node scripts/verify-real-dsh.mjs <prefix>`. The script creates and deletes its own temporary profile and workspace, uses loopback MCP only, and submits no model request. Verified on macOS / Node 24.12.0; Windows remains unverified.
 - Workspace servers support **stdio**, **HTTP static-token** (`tokenEnv`), **HTTP OAuth** (the same discovery + PKCE + dynamic client registration flow as global servers, including the optional `clientId` / `clientSecretEnv` / `clientName` / `scope` fields in the hand-written config), and **HTTP no-auth** (`authMode: "none"`, no `Authorization` header). Workspace OAuth tokens persist in `~/.dsh/mcp-manager.json` (never in the declarative `mcp.json`); each workspace server row exposes a **去认证 / Authenticate** button for OAuth servers.
 
+### JSON import and editing
+
+The `⋯` action beside the add button opens **Edit JSON** and **Import JSON**;
+every expandable server card also carries **Edit as JSON**. Both scopes accept
+the same document — the shape `<workspace>/.dsh/dshmm/mcp.json` already uses, so
+a pasted file works as-is:
+
+```json
+{
+  "mcpServers": {
+    "github": { "type": "http", "url": "https://api.githubcopilot.com/mcp/", "authMode": "oauth" },
+    "unity": { "type": "http", "url": "http://localhost:8090/", "authMode": "static", "tokenEnv": "UNITY_MCP_TOKEN" },
+    "local": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] }
+  }
+}
+```
+
+The fields are the ones the editor already knows: `type`, `url`, `authMode`,
+`tokenEnv`, `headers`, `headerEnv`, `clientId`, `clientSecretEnv`, `clientName`,
+`scope`, `redirectUrl`, `timeout`, `command`, `args`, `env`, `cwd`.
+
+- **Import JSON** is additive: it creates and updates, and an entry missing from
+  the pasted document changes nothing. **Edit JSON** opens the current scope as a
+  document and applies it as a whole, so it can create, update and delete; a
+  deletion is listed in the preview and confirmed before anything is written.
+- **The preview decides nothing for you.** Every entry is classified `new`,
+  `update`, `unchanged`, `conflict`, `invalid`, or (`Edit JSON` only) `delete`,
+  with the changed fields and their before/after values. A name already used in
+  the other scope is a `conflict`: choose **keep** (skip that entry) or
+  **replace** (move the existing server into the target scope, taking its OAuth
+  session when the client identity and issuer match). Apply stays unavailable
+  while an entry is invalid or a conflict is undecided.
+- **A batch is atomic.** The whole document is validated first; an invalid entry
+  aborts it with the entry name and the offending field, and nothing is written.
+  A batch is limited to 200 entries and 1 MiB.
+- **A missing `type` is inferred here only.** An entry with `command` and no `url`
+  becomes a stdio server, and `type: "sse"` is read as HTTP. Hand-written
+  workspace files keep their strict rule.
+- **Merge rules.** Structural fields come from the entry, so omitting `headers`
+  clears them. An omitted OAuth field (`clientId`, `clientSecretEnv`,
+  `clientName`, `scope`, `redirectUrl`) and an empty `tokenEnv` inherit the stored
+  value; an explicit `""` clears an OAuth field. Keys the schema does not define
+  are discarded — including `oauth`, `tokens` and `staticToken`, so a document can
+  never introduce a credential — while unknown keys at the top of a workspace file
+  (`exclude`, `disabled`, a custom key) are preserved.
+- **OAuth sessions survive.** A stored registration and its tokens are kept while
+  the client identity and the issuer do not change, and they move with the server
+  on a `replace`. A changed identity drops them and the next authentication
+  registers again.
+- **Nothing else changes.** The import never enables or disables a server, never
+  starts an authorization, and never disconnects a server whose configuration did
+  not change. A server that was disabled stays disabled and does not connect.
+
+The same operation is available over HTTP:
+
+```sh
+curl -s "localhost:<gui-port>/mcp-manager/api/import" \
+  -H 'content-type: application/json' \
+  -d '{"scope":"global","mode":"import","dryRun":true,"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/"}}}'
+```
+
+`dryRun: true` returns the plan and writes nothing; omit it to apply.
+`scope: "workspace"` needs `path`, `resolutions` maps a conflicting name to
+`keep` or `replace`, and `lockedName` restricts a document to one server (what the
+card action uses).
+
 ## How it works
 
 In v0.13.4, pre-registered OAuth clients reuse the configured Client ID for both

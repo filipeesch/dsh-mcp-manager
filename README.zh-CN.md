@@ -188,6 +188,59 @@ mcp__odin__execute_tool     mcp__odin__list_tool_scopes
 恢复回归测试：`node --test test/workspace-reconnect.test.js`。真实 Loader 冒烟验证为手动启用：先将 `@deepseek-ai/dsh@0.2.1-rc.2` 安装到临时 npm prefix，再运行 `node scripts/verify-real-dsh.mjs <prefix>`。脚本会自行创建并删除临时 profile 和工作区，仅访问 loopback MCP，不发起模型请求。已在 macOS / Node 24.12.0 验证，Windows 尚未验证。
 - 工作区服务器支持 **stdio**、**HTTP 静态 token**（`tokenEnv`）、**HTTP OAuth**（与全局服务器相同的发现 + PKCE + 动态客户端注册流程，手写配置同样支持可选的 `clientId` / `clientSecretEnv` / `clientName` / `scope` / `redirectUrl`）与 **HTTP 无鉴权**（`authMode: "none"`，不发 `Authorization` 头）。工作区 OAuth token 持久化在 `~/.dsh/mcp-manager.json`（绝不写进声明式的 `mcp.json`）；每条工作区 OAuth 服务器行都有「去认证」按钮。
 
+### JSON 导入与编辑
+
+添加按钮旁的 `⋯` 会打开 **编辑 JSON** 与 **导入 JSON**；每张可展开的服务器卡片也带有
+**以 JSON 编辑**。两个作用域接受同一份文档 —— 也就是
+`<workspace>/.dsh/dshmm/mcp.json` 已有的形状，因此整份文件可以直接粘贴：
+
+```json
+{
+  "mcpServers": {
+    "github": { "type": "http", "url": "https://api.githubcopilot.com/mcp/", "authMode": "oauth" },
+    "unity": { "type": "http", "url": "http://localhost:8090/", "authMode": "static", "tokenEnv": "UNITY_MCP_TOKEN" },
+    "local": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."] }
+  }
+}
+```
+
+可用字段与编辑器一致：`type`、`url`、`authMode`、`tokenEnv`、`headers`、`headerEnv`、
+`clientId`、`clientSecretEnv`、`clientName`、`scope`、`redirectUrl`、`timeout`、
+`command`、`args`、`env`、`cwd`。
+
+- **导入 JSON** 只做增量：创建与更新，文档中没有的条目不受影响。**编辑 JSON** 把当前作用域
+  作为一整份文档应用，可以创建、更新与删除；删除会先在预览中列出，确认后才写入。
+- **预览不替你做决定。** 每个条目会被归类为 `新增`、`更新`、`未变化`、`冲突`、`无效`，
+  或（仅在编辑模式下）`删除`，并列出变更字段及其前后值。名称已被另一作用域占用即为
+  `冲突`：选择 **保留现有**（跳过该条目）或 **替换**（把已有服务器移动到目标作用域；
+  若客户端标识与 issuer 一致，OAuth 会话一并迁移）。只要存在无效条目或未决冲突，
+  应用按钮就不可用。
+- **批次是原子的。** 整份文档先完成校验；任一条目无效都会中止批次并指出条目与字段，
+  不写入任何内容。单批上限为 200 个条目与 1 MiB。
+- **仅在导入路径推断 `type`。** 带 `command` 而无 `url` 的条目按 stdio 处理，
+  `type: "sse"` 按 HTTP 读取；手写的工作区文件仍保持严格规则。
+- **合并规则。** 结构性字段来自条目，因此省略 `headers` 会清空它；省略的 OAuth 字段
+  （`clientId`、`clientSecretEnv`、`clientName`、`scope`、`redirectUrl`）与空的 `tokenEnv`
+  继承已存储的值，显式 `""` 则清除 OAuth 字段。模式未定义的键会被丢弃 —— 包括
+  `oauth`、`tokens` 与 `staticToken`，因此文档无法引入凭据；工作区文件顶层的未知键
+  （`exclude`、`disabled`、自定义键）会被保留。
+- **OAuth 会话会保留。** 只要客户端标识与 issuer 不变，已存储的注册与 token 都会保留，
+  并在 `替换` 时随服务器迁移；标识变化则丢弃，下次认证重新注册。
+- **其余状态不变。** 导入不会启用或禁用服务器、不会发起认证，也不会断开配置未变化的
+  服务器；原本已禁用的服务器保持禁用且不会连接。
+
+同样的操作也可以通过 HTTP 完成：
+
+```sh
+curl -s "localhost:<gui-port>/mcp-manager/api/import" \
+  -H 'content-type: application/json' \
+  -d '{"scope":"global","mode":"import","dryRun":true,"mcpServers":{"github":{"type":"http","url":"https://api.githubcopilot.com/mcp/"}}}'
+```
+
+`dryRun: true` 只返回计划、不写入；省略即应用。`scope: "workspace"` 需要 `path`，
+`resolutions` 把冲突名称映射为 `keep` 或 `replace`，`lockedName` 把文档限制为单个服务器
+（卡片动作即使用该参数）。
+
 ## 工作原理
 
 v0.13.4 修复手动注册的 OAuth 客户端刷新：授权码交换和刷新都使用配置的
