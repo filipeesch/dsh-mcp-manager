@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-> **0.18.0** 用插件自有的回环监听器取代了 GUI 承载的 OAuth 回调。破坏性变更与升级步骤见[发行说明](docs/release-v0.18.0.md)。
+> **0.21.0** 新增「在对话中认证」：token 过期的工具调用不再直接失败，而是在聊天窗口里等待重新认证。详见[发行说明](docs/release-v0.21.0.md)。
 
 **[DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness) 的 MCP 服务器管理插件** —— 在 设置 → MCP 页签里添加 MCP 服务器（远程 HTTP 或本地 stdio 进程），HTTP 服务器可在 **浏览器里完成 OAuth 登录**，工具既可直接暴露，也可通过紧凑的按需 broker 调用。
 
@@ -27,6 +27,7 @@
 - **HTTP-with-SSE 服务器**：自动识别并接入旧式 SSE 传输（GET 事件流先给出会话端点，响应全部经该流异步回传），服务器拒绝普通 POST 时自动切换。Streamable HTTP 服务器不受影响。
 - **就地编辑**：重命名、stdio ↔ HTTP 切换、改认证方式/标头，无需删除重建。
 - **界面内诊断**：失败的服务器在**折叠状态**就显示失败原因（无需展开），展开后还有 **日志 / Logs** 面板——按需加载、已脱敏的轨迹，覆盖每一次发现 URL 与 HTTP 状态、客户端注册、授权跳转、token 交换/刷新、`initialize`、`tools/list`，以及 stdio 子进程退出时的 stderr 尾部。脱敏在**写入时**完成（Bearer 值、`code`/`state`、`client_secret`、token 一律剥掉），而不是渲染时。MCP 传输错误先脱敏再截断，工具列表刷新警告也在写入宿主日志前采用相同的脱敏处理。
+- **在对话中认证（v0.21.0）**：调用因 token 过期或被吊销而被拒时，插件把连接标为 `needs-auth`，并让该调用最多等待 `config.authWaitMs`（默认两分钟）；此时输入框上方出现横幅，提供 **去认证**（与 设置 → MCP 相同的浏览器流程）和 **取消**。回调完成后服务器重连，同一次调用带相同参数重试一次，回合继续进行、无需再次询问。横幅只列出当前对话的等待调用（全局服务器与该对话所在工作区的服务器），不含任何 token，最后一条等待调用结束后消失。`static` token 或 stdio 服务器没有浏览器流程，会立即以可操作的错误失败。
 - **卡片上的工具清单**：展开已连接的服务器会按原始工具名列出它注册的工具（`search_repos`，不会显示成 `mcp__github__search_repos`），带数量标题和有限高度的滚动区；长名称自动换行，长列表不会撑高卡片。清单跟随页面轮询——连接、重连、编辑或 `tools/list` 变化都会在不刷新页面的情况下更新。`needs-auth`、`error`、`disabled`、`connecting`、`configured`、`conflict`、已连接但没有工具、读取失败各有独立提示，未连接时绝不显示清单。名称来自 `GET /mcp-manager/api/servers/:id/tools`，因此 `GET /servers` 和 `GET /workspaces` 仍然只带数量。
 - **工具注册**：与内置客户端相同的 `mcp__<server>__<rawName>` 命名约定，含 DSH 工具注册表的严格 schema 清洗，并标记 `isConcurrencySafe`。
 - **工作区隔离**：在 `<workspace>/.dsh/dshmm/mcp.json` 声明项目专属服务器——其工具只注册进该工作区的会话；每条服务器（全局或工作区本地）都有独立的「在此工作区启用」开关，且不影响其他工作区。
@@ -131,6 +132,26 @@ HTTP、stdio，以及用户和工作区作用域。例如，`600000` 允许仿�
 覆盖值仅用于 stdio、Streamable HTTP 和旧式 HTTP-with-SSE 的 `tools/call`。
 初始化、工具列表和通知仍保留原有的 60 秒默认时限。超时报错包含具体预算；客户端
 超时不保证远端服务器已停止任务。外层 Code/PTC 运行时可能另有自己的时限。
+
+### 在对话中认证
+
+当 OAuth 服务器在回合进行中不再接受 token 时，工具调用不再立即失败。插件记录这条等待中的调用、把连接标为
+`needs-auth`，并在拥有该调用的对话里、**输入框上方**显示认证横幅：每个服务器一行，包含原因、等待中的调用数、
+剩余时间、上一次尝试的失败信息（如有），以及两个操作。
+
+- **去认证** 启动该服务器既有的授权流程（与 设置 → MCP 相同的接口和浏览器流程），在系统浏览器打开提供方页面。
+  回调完成、服务器重连后，等待中的调用会用相同参数重试一次，该行随即消失。
+- **取消** 释放本对话在该服务器上的等待调用；它们以可操作的错误结束，回合继续。取消不会停用服务器，也不会删除其 token。
+- 等待时长由插件行的 `config.authWaitMs` 决定（默认 `120000`，最小 `1000`）。预算耗尽时，调用以错误结束：错误会指明服务器、
+  说明调用未执行，并提示横幅与 设置 → MCP 两处入口。单次授权失败不会结束等待：该行显示失败原因，你可以在预算耗尽前再次尝试。
+- 横幅只列出**当前对话**的等待调用——全局服务器，或该对话所在工作区的服务器。仅仅需要认证、没有等待中的调用的服务器仍只在
+  设置 → MCP 中显示；`static` 或 stdio 服务器没有浏览器流程，会立即以可操作的错误失败。
+- 停止回合（Esc）会中断等待中的调用、释放待处理的授权监听器，且不会重试。
+
+同样的状态也通过插件 API 提供：`GET /mcp-manager/api/attention` 列出等待中的调用
+（`serverId`、`sessionId`、`scope`、`workspacePath`、`name`、`reason`、`error`、`phase`、`pending`、`remainingMs`），
+`POST /mcp-manager/api/attention/cancel`（`{ sessionId, serverId }`）释放某个会话的等待调用。两个响应都不包含
+token、client secret 或授权 URL。
 
 ### Agent 看到什么
 
@@ -267,6 +288,8 @@ Client ID，每次请求都从指定环境变量读取当前 client secret。全
 | 图片结果 | `output.render` 文本优先；`execute(args, exec)` 暂存投影，`finalizeContent` 仅在路由模型声明图片输入时装上持久化 DSH attachment，其余情况降级为文本占位符 |
 | 按需 broker | Profile 开关注册三个 broker 工具；DSH `0.2.2+` 上原始 `mcp__*` 定义保留 `deferLoading` 标记（由 provider 适配器隐藏），老 harness 在提示词瀑布里过滤；执行守卫只放行 `mcp_execute_tool`（以及执行器拥有提示词 section 的 PTC 程序） |
 | 工具列表变化 | stdio 通知与 Streamable HTTP SSE 通道触发重新读取 `tools/list`；未变化的注册保持挂载 |
+| 认证等待 | 被 `401`/`403 insufficient_scope` 拒绝且刷新无法修复的 `tools/call` 会抛出 `AuthRequiredError`；对 OAuth 服务器，调用在 `lib/auth/gate.js` 中等待（预算为 `config.authWaitMs`），重连后重试一次。`static`/stdio 服务器立即失败，连接阶段的失败从不等待，`GET /attention` 只报告每个会话中等待中的调用 |
+| 对话横幅 | 客户端在 `conversation.input.dock`（order 10，locale `mcp`）注册横幅，每 2 秒轮询 `/attention`，按会话及其工作区过滤，并与两个设置行共用同一个启动授权助手 |
 | 工作区隔离 | 装饰 `agents.create`/`resume`，组合出 per-agent setup：把 `<workspace>/.dsh/dshmm/mcp.json` 的工具注册进 agent 作用域，并对 `exclude`/`disabled` 中的全局名称应用 `tools.restrict({ deny })`；`disabled` 的工作区本地服务器保持声明，但不连接、不注册 |
 | 新版本兼容 | 组合出的 agent setup 优先取 setup 回调的第二个参数（DSH 0.1.5-alpha.1 起），仅在缺失时回退到旧的 `agent` 上下文访问器。新版 harness 移除了该访问器，直接读 `ctx.agent` 会抛 `cannot get property "agent" without inject`，导致每次 `agents.resume`/`create` 失败。GUI webserver 改为惰性注入，没有它的 profile 也能继续注册 MCP 工具，而不会留下未激活的条目 |
 | 交互通道 | 设置页与 host 半之间走同源 JSON API（`/mcp-manager/api/*`） |
@@ -288,6 +311,11 @@ DSH STORE 目录额外固定完整的 40 位 commit，而不是浮动分支（0.
 | 自动化（单元 + 契约） | 已验证 | `npm test`（`node --test`）——覆盖 host 半导出的辅助函数，以及基于 stub context 的 `apply()` API 冒烟测试。测试绝不写真实的 `~/.dsh` |
 | 一次性 Profile 运行时 | 已验证 | 临时 `$DSH_HOME`：用官方 CLI 安装，启动 `web`（`GET /mcp-manager/api/ping` 返回 200）与 `headless`（agent setup 生效；在 `0.1.5-*` 上还可确认 agent 能看到注册的 `mcp__<服务器>__<工具>`），对 `dshReleases` 中每条已声明版本各跑一次，随后删除 Profile |
 | 真实 Profile、商城页面、公开产物 | 未验证 | E4/E5 验收由运维方负责，不属于本仓库的验证范围 |
+
+0.21.0 新增 `test/auth-gate.test.js`、`test/auth-recovery.test.js`、`test/attention-api.test.js`、
+`test/auth-blocking.test.js` 与 `test/client-chat-auth.test.js`。阻塞行为通过真实的回环 MCP + 授权服务器端到端验证，
+覆盖工作区范围、超时、取消、中断与 static token 场景；横幅通过 `node:vm` 中真实的 `lib/client.js` 工厂渲染。
+横幅在运行中 GUI 里的实际位置未由本仓库验证。
 
 0.11.0 的 locale 契约由客户端/API stub 测试覆盖。一次性 Profile 的 CLI 安装成功，但 web 启动被沙箱阻止（`listen EPERM 127.0.0.1:3080`），因此尚未验证浏览器中的实时语言切换。
 

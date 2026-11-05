@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-> **0.18.0** replaces the GUI-hosted OAuth callback with plugin-owned loopback listeners. See the [release notes](docs/release-v0.18.0.md) for the breaking changes and the upgrade steps.
+> **0.21.0** adds in-conversation authentication: a tool call whose token expired now waits for a reauthorization in the chat instead of failing the turn. See the [release notes](docs/release-v0.21.0.md).
 
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
 
@@ -47,6 +47,7 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **HTTP-with-SSE servers**: the legacy SSE transport (a GET event stream that advertises a session endpoint, with replies delivered asynchronously on that stream) is detected automatically and used when a server rejects a plain POST. Streamable HTTP servers are unaffected.
 - **Edit-in-place**: rename a server, switch stdio ↔ HTTP, or change auth/headers without deleting and re-adding it.
 - **In-GUI diagnostics**: a failed server shows its reason on the collapsed card (no need to expand it), and the expanded card has a **Logs** panel — an on-demand, redacted trace of every discovery URL and HTTP status, client registration, authorization, token exchange/refresh, `initialize`, `tools/list`, and the stderr tail of a stdio child that exited. Secrets (bearer values, `code`/`state`, `client_secret`, tokens) are stripped when the entry is written, never when it is rendered. MCP transport errors are redacted before truncation, and tool-list refresh warnings use the same redaction before reaching the host logger.
+- **In-conversation authentication (v0.21.0)**: when a call is rejected with an expired or revoked token, the plugin marks the connection `needs-auth` and holds the call for up to `config.authWaitMs` (default two minutes) while a banner above the composer offers **Authenticate** (the same browser flow as Settings → MCP) and **Cancel**. After the callback the server reconnects and the same call is retried once, so the turn continues without being asked again. The banner lists only calls waiting for the current conversation (global servers and that conversation's workspace), carries no token, and disappears with the last waiting call. A `static` token or stdio server has no browser flow and fails immediately with an actionable error.
 - **Tool inventory on the card**: expanding a connected server lists the raw tool names it registered (`search_repos`, never `mcp__github__search_repos`) in a bounded scroll area, with the count in the heading; long names wrap and a long list never stretches the card. The list follows the page poll — connect, reconnect, an edit or a `tools/list` change all refresh it without a page reload. `needs-auth`, `error`, `disabled`, `connecting`, `configured`, `conflict`, connected-with-no-tools and a failed read each have their own message, and a server that is not connected never shows a list. The names come from `GET /mcp-manager/api/servers/:id/tools`, so `GET /servers` and `GET /workspaces` stay count-only.
 - **Tool registration** with the same `mcp__<server>__<rawName>` naming convention as the built-in client, including strict-schema sanitization for the DSH tool registry and `isConcurrencySafe` marking.
 - **Workspace isolation**: declare per-project servers in `<workspace>/.dsh/dshmm/mcp.json` — their tools register only into that workspace's sessions, and every row (global or workspace-local) has a per-workspace **enable** switch that never affects other workspaces.
@@ -164,6 +165,33 @@ HTTP-with-SSE. Initialization, tool listing, and notifications keep their existi
 60-second defaults. Timeout errors include the elapsed budget; a client timeout
 does not guarantee that a remote server has stopped its work. A surrounding
 Code/PTC runtime may impose its own deadline.
+
+### Authenticating from the conversation
+
+When an OAuth server stops accepting its token in the middle of a turn, the tool call no longer fails immediately.
+The plugin records the waiting call, moves the connection to `needs-auth`, and shows an **authentication banner above
+the composer** in the conversation that owns the call: one row per server with the reason, the number of waiting
+calls, the time left, the failure of the last attempt (if any), and two actions.
+
+- **Authenticate** starts the existing authorization for that server (the same endpoint and browser flow as
+  Settings → MCP) and opens the provider page in the system browser. When the callback completes and the server
+  reconnects, the waiting call is retried once with the same arguments, and the row disappears.
+- **Cancel** releases that conversation's waiting calls for the server; they end with an actionable error and the
+  turn continues. It does not disable the server or delete its tokens.
+- The wait is bounded by the plugin row's `config.authWaitMs` (default `120000`, minimum `1000`). When the budget
+  expires, the call fails with an error that names the server, states that the call was not executed, and points at
+  the banner and Settings → MCP. A failed authorization attempt does not end the wait: the row shows the failure and
+  lets you try again until the budget expires.
+- The banner lists only calls waiting for **this conversation** — a global server or a server of that conversation's
+  workspace. A server that needs authentication without a waiting call stays in Settings → MCP, and a `static` or
+  stdio server, which has no browser flow, fails immediately with an actionable error.
+- Stopping the turn (Esc) interrupts the waiting call, releases a pending authorization listener, and retries
+  nothing.
+
+The same state is available over the plugin API: `GET /mcp-manager/api/attention` lists the waiting calls
+(`serverId`, `sessionId`, `scope`, `workspacePath`, `name`, `reason`, `error`, `phase`, `pending`, `remainingMs`),
+and `POST /mcp-manager/api/attention/cancel` with `{ sessionId, serverId }` releases one session's calls. Neither
+response contains a token, a client secret or the authorization URL.
 
 ### What the agent sees
 
@@ -317,6 +345,8 @@ attempts cannot restore tools or clear a newer connection.
 | Image results | `output.render` is text-first; `execute(args, exec)` stages a projection and `finalizeContent` installs durable DSH attachments only when the routed model declares image input — every other case degrades to a text placeholder |
 | On-demand broker | A profile setting installs three broker tools; on DSH `0.2.2+` raw `mcp__*` definitions stay registered with `deferLoading` (the provider adapter hides them), older harnesses filter the system-prompt waterfall; an execution guard admits only `mcp_execute_tool` (and PTC programs, whose executor owns prompt sections) |
 | Tool list changes | stdio notifications and the Streamable HTTP SSE channel refresh the live `tools/list`; unchanged registrations remain mounted |
+| Auth wait | A `tools/call` rejected with `401`/`403 insufficient_scope` that a refresh cannot repair throws `AuthRequiredError`; for an OAuth server the call waits in `lib/auth/gate.js` (budget `config.authWaitMs`) and is retried once after the reconnect. Static/stdio servers fail immediately, connection-time failures never wait, and `GET /attention` reports only the waiting calls per session |
+| In-conversation banner | The client half registers `conversation.input.dock` (order 10, locale `mcp`), polls `/attention` every 2 seconds, filters by the session and its workspace, and shares the start-authorization helper with the two Settings rows |
 | Workspace isolation | `agents.create`/`resume` are decorated to compose a per-agent setup that registers `<workspace>/.dsh/dshmm/mcp.json` tools into the agent scope and applies `tools.restrict({ deny })` for `exclude`/`disabled` global names; a `disabled` workspace-local server stays declared but is neither connected nor registered |
 | Harness compatibility | The composed agent setup takes the Agent from the setup callback's explicit second argument (DSH 0.1.5-alpha.1 and later) and only falls back to the legacy `agent` context accessor. Newer harness builds removed that accessor, so reading `ctx.agent` there throws `cannot get property "agent" without inject` and fails every `agents.resume`/`create`. The GUI webserver is injected lazily, so a profile without one keeps its MCP tools instead of leaving a pending entry |
 | Hot path | Same-origin JSON API under `/mcp-manager/api/*` between the settings page and the host half |
@@ -338,6 +368,12 @@ What is verified today, and what is not:
 | Automated (unit + contract) | verified | `npm test` (`node --test`) — host-half exported helpers plus a stubbed-context `apply()` API smoke test. Tests never write to a real `~/.dsh` |
 | Disposable-profile runtime | verified | Scratch `$DSH_HOME`: install via the official CLI, boot `web` (`GET /mcp-manager/api/ping` → 200) and `headless` (agent setup applies; on `0.1.5-*` a registered `mcp__<server>__<tool>` is visible to the agent), once per declared `dshReleases` entry, then delete the profile |
 | Real profile, store page, public artifacts | not verified here | E4/E5 acceptance is owned by the operator, not by this repository |
+
+0.21.0 adds `test/auth-gate.test.js`, `test/auth-recovery.test.js`, `test/attention-api.test.js`,
+`test/auth-blocking.test.js` and `test/client-chat-auth.test.js`. The blocking behavior is exercised end to end
+against a real loopback MCP + authorization server, including the workspace scope, timeout, cancel, abort and
+static-token cases; the banner is rendered through the real `lib/client.js` factory in `node:vm`. The banner's
+on-screen placement inside a running GUI is not verified by this repository.
 
 For 0.11.0, the locale contract is covered by the stubbed client/API tests. A disposable-profile CLI install succeeded, but the web boot was blocked by the sandbox (`listen EPERM 127.0.0.1:3080`), so live browser language switching remains unverified.
 

@@ -18,7 +18,8 @@ export function mountClient(fetch, language = 'en', globals = {}) {
   const t = (key, values = {}) => (dictionaries[language]?.[key] ?? dictionaries.en[key] ?? key)
     .replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
   let exported, Section;
-  let states = [], cursor = 0, effects = [], initialized = false;
+  const registrations = [];
+  let states = [], cursor = 0, effects = [], cleanups = [], initialized = false;
   const react = {
     createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
     useState: (initial) => {
@@ -33,12 +34,17 @@ export function mountClient(fetch, language = 'en', globals = {}) {
     useCallback: (callback) => callback,
   };
   runInNewContext(clientSource, {
-    window: { __ModuleLoader__: { load: ({ factory }) => { exported = factory(() => react); } } },
     fetch,
     setInterval: () => 1,
     clearInterval: () => {},
     setTimeout: () => 1,
     ...globals,
+    // `window` is always the module-loader carrier; test extras (open, …)
+    // merge onto it instead of replacing it.
+    window: {
+      __ModuleLoader__: { load: ({ factory }) => { exported = factory(() => react); } },
+      ...(globals.window ?? {}),
+    },
   });
   let dispose;
   exported.apply({
@@ -53,12 +59,21 @@ export function mountClient(fetch, language = 'en', globals = {}) {
     },
     slots: {
       inject: (_name, cb) => cb(),
-      register: (options, component) => { spec = options; Section = component; },
+      register: (options, component) => {
+        registrations.push({ options, component });
+        // Keep `spec`/`render()` pointing at the settings section for the
+        // existing suites; the banner is rendered through `slot()`.
+        if (options?.name === 'settings.section' || Section === undefined) { spec = options; Section = component; }
+      },
     },
   });
   return {
     get dictionaries() { return dictionaries; },
+    get t() { return t; },
     get spec() { return spec; },
+    get registrations() { return registrations; },
+    slot(name) { return registrations.find((entry) => entry.options?.name === name)?.component; },
+    slotOptions(name) { return registrations.find((entry) => entry.options?.name === name)?.options; },
     get inject() { return exported.inject; },
     effectLabels,
     dispose() { dispose(); assert.equal(disposed, true); },
@@ -67,7 +82,16 @@ export function mountClient(fetch, language = 'en', globals = {}) {
       cursor = 0;
       return component(props);
     },
-    effects() { initialized = true; for (const effect of effects) effect(); effects = []; },
+    effects() {
+      initialized = true;
+      for (const effect of effects) {
+        const cleanup = effect();
+        if (typeof cleanup === 'function') cleanups.push(cleanup);
+      }
+      effects = [];
+    },
+    /** Run every effect cleanup recorded since mount (React unmount equivalent). */
+    unmount() { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); },
     reset() { states = []; },
   };
 }
