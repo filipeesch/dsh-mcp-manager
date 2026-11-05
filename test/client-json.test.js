@@ -1,68 +1,14 @@
-/**
- * The JSON entry points: the overflow menu beside the add action, the dialog
- * with its preview, and the per-card action.
- *
- * Runs the real module factory against the same tiny hook harness the locale
- * suite uses. Child components are rendered explicitly, so the markup, the
- * request bodies and the plan rendering are the shipped ones.
- */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import { it } from 'node:test';
 
-const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
+import {
+  mountClient,
+  nodes,
+  response,
+  settle,
+  text,
+} from './helpers/client-harness.js';
 
-function mount(fetch, language = 'en') {
-  let dictionaries, Section;
-  let states = [], cursor = 0, effects = [], initialized = false;
-  const t = (key, values = {}) => (dictionaries[language]?.[key] ?? dictionaries.en[key] ?? key)
-    .replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
-  const react = {
-    createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
-    useState: (initial) => {
-      const index = cursor++;
-      if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
-      return [states[index], (value) => { states[index] = value; }];
-    },
-    useEffect: (effect) => { if (!initialized) effects.push(effect); },
-    useCallback: (callback) => callback,
-  };
-  let exported;
-  runInNewContext(source, {
-    window: { __ModuleLoader__: { load: ({ factory }) => { exported = factory(() => react); } } },
-    fetch,
-    setInterval: () => 1,
-    clearInterval: () => {},
-    setTimeout: () => 1,
-  });
-  exported.apply({
-    effect(fn) { fn(); },
-    locale: {
-      register(ns, table) { dictionaries = table; return () => {}; },
-      bind() { return t; },
-    },
-    slots: {
-      inject: (_name, cb) => cb(),
-      register: (options, component) => { Section = component; },
-    },
-  });
-  return {
-    render(component = Section, props = { t }) {
-      cursor = 0;
-      return component(props);
-    },
-    effects() { initialized = true; for (const effect of effects) effect(); effects = []; },
-    reset() { states = []; },
-    setLocale(next) { language = next; },
-    dictionaries() { return dictionaries; },
-  };
-}
-
-const response = (body, ok = true, status = 200) => ({ ok, status, json: async () => body });
-const settle = () => new Promise((resolve) => setImmediate(resolve));
-const nodes = (tree) => (tree && typeof tree === 'object' ? [tree, ...tree.children.flatMap(nodes)] : []);
-const text = (tree) => (typeof tree === 'string' ? tree : tree?.children?.map(text).join(' ') ?? '');
 const byClass = (tree, className) => nodes(tree).find((node) => node.props.className === className);
 const allByClass = (tree, className) => nodes(tree).filter((node) => node.props.className === className);
 const byLabel = (tree, label) => nodes(tree).find((node) => node.props['aria-label'] === label);
@@ -92,7 +38,7 @@ function router(overrides = {}) {
 }
 
 async function openList(fetch) {
-  const app = mount(fetch);
+  const app = mountClient(fetch);
   app.render();
   app.effects();
   await settle();
@@ -322,6 +268,6 @@ it('localizes the menu and the dialog in both languages', async () => {
   app.setLocale('zh');
   tree = app.render();
   assert.deepEqual(allByClass(tree, 'mm_menuItem').map((item) => text(item)), ['编辑 JSON', '导入 JSON']);
-  const dictionaries = app.dictionaries();
+  const dictionaries = app.dictionaries;
   assert.deepEqual(Object.keys(dictionaries.zh).sort(), Object.keys(dictionaries.en).sort());
 });

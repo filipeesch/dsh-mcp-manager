@@ -78,6 +78,34 @@ function mount(t, initialState, seed = [], executeShape = 'batch') {
   return { tools, guards, hooks, codeAgent, dispatched, registry, request };
 }
 
+it('enables the broker by default when the profile never chose a value', async t => {
+  const { tools, guards, request } = mount(t, { servers: [] });
+  assert.ok(tools.has('mcp_search_tools'), 'the absent setting resolves to enabled');
+  assert.equal(guards.length, 1, 'the direct-call guard is installed');
+  const settings = await request('GET', '/settings');
+  assert.equal(settings.onDemandToolInjection, true);
+});
+
+it('keeps the broker off for an explicit false and applies enabling without a reconnect', async t => {
+  const fixture = await startTimeoutMcp();
+  t.after(() => fixture.close());
+  const { tools, guards, request } = mount(t, { servers: [], onDemandToolInjection: false });
+  assert.equal(tools.has('mcp_search_tools'), false);
+  assert.equal(guards.length, 0, 'no direct-call guard while the broker is off');
+
+  const created = await request('POST', '/servers', { name: 'explicit', type: 'http', url: fixture.url, authMode: 'none' });
+  assert.equal(created.status, 201);
+  const connected = await request('POST', `/servers/${created.server.id}/connect`);
+  assert.equal(connected.server.status, 'connected', connected.server.error);
+  assert.equal(tools.get('mcp__explicit__wait')?.deferLoading, undefined, 'direct definitions stay callable');
+
+  // Turning it on re-registers live definitions without reconnecting the server.
+  const enabled = await request('POST', '/settings/on-demand', { enabled: true });
+  assert.equal(enabled.onDemandToolInjection, true);
+  assert.ok(tools.has('mcp_search_tools'));
+  assert.equal(tools.get('mcp__explicit__wait')?.deferLoading, true);
+});
+
 it('keeps the assemble waterfall tolerant of the DSH 0.2 payload', async t => {
   const { hooks } = mount(t, { servers: [], onDemandToolInjection: true });
   const assemble = hooks.find(hook => hook.event === 'system-prompt/assemble');

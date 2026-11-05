@@ -88,6 +88,7 @@ async function loadWith(serverConfig) {
     logger: { info() {}, warn() {}, error() {} },
     tools: {
       register(definition) { registered.set(definition.name, definition); return () => registered.delete(definition.name); },
+      guard: () => () => {},
       restrict: () => () => {},
       schemas: () => [],
       get: () => undefined,
