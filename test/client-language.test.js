@@ -1,74 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import { it } from 'node:test';
+import {
+  clientSource as source,
+  mountClient as mount,
+  response,
+  settle,
+  nodes,
+  text,
+  content,
+} from './helpers/client-harness.js';
 
-const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
-
-// Run the real module factory with a tiny hook harness; no browser or dependencies.
-function mount(fetch, language = "en", globals = {}) {
-  let dictionaries, spec, disposed = false;
-  const effectLabels = [];
-  const t = (key, values = {}) => (dictionaries[language]?.[key] ?? dictionaries.en[key] ?? key)
-    .replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
-  let exported, Section;
-  let states = [], cursor = 0, effects = [], initialized = false;
-  const react = {
-    createElement: (type, props, ...children) => ({ type, props: props ?? {}, children: children.flat(Infinity) }),
-    useState: (initial) => {
-      const index = cursor++;
-      if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
-      return [states[index], (value) => { states[index] = value; }];
-    },
-    useEffect: (effect) => { if (!initialized) effects.push(effect); },
-    useCallback: (callback) => callback,
-  };
-  runInNewContext(source, {
-    window: { __ModuleLoader__: { load: ({ factory }) => { exported = factory(() => react); } } },
-    fetch,
-    setInterval: () => 1,
-    clearInterval: () => {},
-    setTimeout: () => 1,
-    ...globals,
-  });
-  let dispose;
-  exported.apply({
-    effect(fn, label) { effectLabels.push(label); dispose = fn(); },
-    locale: {
-      register(ns, table) {
-        assert.equal(ns, 'mcp');
-        dictionaries = table;
-        return () => { disposed = true; };
-      },
-      bind(ns) { assert.equal(ns, 'mcp'); return t; },
-    },
-    slots: {
-      inject: (_name, cb) => cb(),
-      register: (options, component) => { spec = options; Section = component; },
-    },
-  });
-  return {
-    get dictionaries() { return dictionaries; },
-    get spec() { return spec; },
-    get inject() { return exported.inject; },
-    effectLabels,
-    dispose() { dispose(); assert.equal(disposed, true); },
-    setLocale(next) { language = next; },
-    render(component = Section, props = { t }) {
-      cursor = 0;
-      return component(props);
-    },
-    effects() { initialized = true; for (const effect of effects) effect(); effects = []; },
-    reset() { states = []; },
-  };
-}
-const response = (body, ok = true, status = 200) => ({ ok, status, json: async () => body });
-const settle = () => new Promise((resolve) => setImmediate(resolve));
-function nodes(tree) {
-  return tree && typeof tree === 'object' ? [tree, ...tree.children.flatMap(nodes)] : [];
-}
-const text = (tree) => typeof tree === 'string' ? tree : tree?.children?.map(text).join(' ') ?? '';
-const content = (tree) => nodes(tree).find((node) => typeof node.type === 'function');
 
 it('registers balanced mcp dictionaries with effect cleanup and the locale slot seat', () => {
   const app = mount(async () => response({}));
@@ -351,13 +293,19 @@ it('offers a per-workspace enable switch for global and workspace-local servers'
   const localNode = nodes(tree).find((node) => node.props?.server?.id === 'w1');
   const globalNode = nodes(tree).find((node) => node.props?.server?.id === 'g1');
   assert.ok(localNode && globalNode, 'both rows render in the workspace view');
-  const renderRow = (node) => { app.reset(); return app.render(node.type, node.props); };
+  const renderRow = (node, props = {}) => { app.reset(); return app.render(node.type, { ...node.props, ...props }); };
   const workspaceSwitch = (rendered, name) => nodes(rendered).find((node) => node.type === 'button'
     && node.props?.className === 'mm_switch' && node.props['aria-label'] === `Enabled in this workspace: ${name}`);
 
+  // A workspace card starts collapsed like the global one: no actions until the
+  // header is opened.
+  const collapsedRow = renderRow(localNode, { open: false });
+  assert.ok(!nodes(collapsedRow).some((node) => node.type === 'button' && text(node) === 'Edit'),
+    'a workspace card starts collapsed');
+
   // A disabled workspace-local server still renders its row, dimmed, with the
   // switch label reporting the state; the switch re-enables it.
-  let row = renderRow(localNode);
+  let row = renderRow(localNode, { open: true });
   assert.match(text(row), /Disabled/);
   const rowLabels = nodes(row).filter((node) => node.type === 'button').map(text);
   assert.ok(rowLabels.includes('Edit') && rowLabels.includes('Delete'), 'workspace rows expose direct actions');

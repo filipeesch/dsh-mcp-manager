@@ -28,7 +28,7 @@ function makeCtx() {
   const disposers = [];
   const ctx = {
     logger: { info() {}, warn() {}, error() {} },
-    tools: { register: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
+    tools: { register: () => () => {}, guard: () => () => {}, restrict: () => () => {}, execute: async () => ({}) },
     webServer: { register: (route) => { routes.push(route); return () => {}; } },
     get: () => undefined,
     on: () => () => {},

@@ -65,18 +65,20 @@ it('settings omits language, rejects the removed route, and preserves legacy sta
   const get = () => request(handler, 'GET', '/mcp-manager/api/settings');
   // The payload also carries the OAuth callback configuration and its live
   // status; this test only pins the on-demand flag and the removed language key.
-  assert.equal((await get()).json.onDemandToolInjection, false);
+  assert.equal((await get()).json.onDemandToolInjection, true, 'an absent setting resolves to enabled');
   assert.equal((await get()).json.language, undefined);
   mkdirSync(join(scratchHome, '.dsh'), { recursive: true });
   writeFileSync(statePath, JSON.stringify({ servers: [], language: 'zh' }));
   handler = makeCtx().routes[0].handler;
-  assert.equal((await get()).json.onDemandToolInjection, false);
+  assert.equal((await get()).json.onDemandToolInjection, true);
   for (const body of [{ language: 'en' }, { language: 'zh' }, {}, null]) {
     assert.equal((await request(handler, 'POST', '/mcp-manager/api/settings/language', body)).code, 404);
   }
   assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).language, 'zh');
-  assert.equal((await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: true })).code, 200);
+  // Toggle off (the effective default is on) so the save path actually runs and
+  // the legacy language value must survive it.
+  assert.equal((await request(handler, 'POST', '/mcp-manager/api/settings/on-demand', { enabled: false })).code, 200);
   assert.equal(JSON.parse(readFileSync(statePath, 'utf8')).language, 'zh');
   handler = makeCtx().routes[0].handler;
-  assert.equal((await get()).json.onDemandToolInjection, true);
+  assert.equal((await get()).json.onDemandToolInjection, false);
 });

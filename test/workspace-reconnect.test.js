@@ -84,12 +84,13 @@ function mount(t, config, extraRegistry = []) {
   const write = value => writeFileSync(path, JSON.stringify({ mcpServers: value }));
   write(config);
   mkdirSync(join(scratch, '.dsh'), { recursive: true });
-  writeFileSync(join(scratch, '.dsh/mcp-manager.json'), JSON.stringify({ servers: [] }));
+  writeFileSync(join(scratch, '.dsh/mcp-manager.json'), JSON.stringify({ servers: [], onDemandToolInjection: false }));
   const cleanup = [];
   const registered = new Map();
   const registry = {
     register(def) { registered.set(def.name, def); return () => registered.delete(def.name); },
-    restrict: () => () => {}, execute: async () => ({}),
+    guard: () => () => {},
+    restrict: () => () => {}, schemas: () => [], get: () => undefined, execute: async () => ({}),
   };
   const agentCleanup = [];
   const agent = { session: { header: { cwd: dir } }, ctx: { tools: registry } };
