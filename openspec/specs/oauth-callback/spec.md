@@ -9,7 +9,7 @@ Owns the local HTTP listeners that receive OAuth authorization codes and routes 
 
 The plugin SHALL receive OAuth callbacks on HTTP listener(s) that it opens itself, independently of the DSH web interface. The web interface MUST NOT host an OAuth callback route, and the listener MUST NOT require it to be mounted.
 
-A listener MUST bind loopback interfaces only. It SHALL be started when an authorization flow needs it and MUST NOT be opened at plugin startup or only to display a redirect URI. Starting an authorization remains a settings/workspace action, so a profile that provides no web interface has no trigger of its own.
+A listener MUST bind loopback interfaces only. It SHALL be started when an authorization flow needs it and MUST NOT be opened at plugin startup or only to display a redirect URI. Starting an authorization remains an operator action available from Settings → MCP, from a workspace row and from the conversation authentication banner, so a profile that provides no web interface has no trigger of its own.
 
 #### Scenario: The web interface hosts no callback route
 
@@ -25,7 +25,6 @@ A listener MUST bind loopback interfaces only. It SHALL be started when an autho
 
 - **WHEN** a callback address resolves to anything other than a loopback interface
 - **THEN** the listener is not opened and the attempt fails with an actionable message
-
 ### Requirement: Listener readiness before authorization
 
 The plugin MUST NOT return an authorization URL until every listener the redirect URI requires is bound and accepting connections, and the port in the returned redirect URI MUST be the port the listener actually bound.

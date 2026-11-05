@@ -8,6 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 
 /** The redirect URI the authorization request pinned for this flow. */
 export function redirectOf(authorizeUrl) {
@@ -91,9 +92,12 @@ export async function canBindIPv6Loopback() {
  * protected-resource pointer, and the authorization server advertises RFC 7591
  * registration and a token endpoint. Records every registration and form.
  */
-export async function startAuthorizationStub({ failToken = false, confidential = false, authorizationEndpoint = '' } = {}) {
+export async function startAuthorizationStub({ failToken = false, failRefresh = false, scopeChallenge = false, confidential = false, sse = false, authorizationEndpoint = '' } = {}) {
   const forms = [];
   const registrations = [];
+  const toolCalls = [];
+  /** sessionId -> SSE response stream, for the legacy HTTP-with-SSE mode. */
+  const sseSessions = new Map();
   /** client_id -> client_secret issued by a confidential registration */
   const clientSecrets = new Map();
   const revoked = new Set();
@@ -108,11 +112,57 @@ export async function startAuthorizationStub({ failToken = false, confidential =
         res.end(typeof body === 'string' ? body : JSON.stringify(body));
       };
       const base = `http://127.0.0.1:${server.address().port}`;
+      const requestUrl = new URL(req.url, base);
+      if (sse && requestUrl.pathname === '/mcp' && req.method === 'GET') {
+        const bearer = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+        if (!(bearer.startsWith('access-') && !revoked.has(bearer))) {
+          return send(401, { error: 'unauthorized' }, {
+            'WWW-Authenticate': `Bearer error="invalid_request", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+          });
+        }
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' });
+        const sessionId = randomUUID();
+        sseSessions.set(sessionId, res);
+        res.write(`event: endpoint\ndata: ?sessionId=${sessionId}\n\n`);
+        res.on('close', () => sseSessions.delete(sessionId));
+        return;
+      }
+      if (sse && requestUrl.pathname === '/mcp' && req.method === 'POST') {
+        const sessionId = requestUrl.searchParams.get('sessionId');
+        if (!sessionId) return send(400, 'sessionId query parameter is not provided', { 'Content-Type': 'text/plain; charset=UTF-8' });
+        const stream = sseSessions.get(sessionId);
+        if (!stream) return send(404, 'unknown session', { 'Content-Type': 'text/plain; charset=UTF-8' });
+        const bearer = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+        if (!(bearer.startsWith('access-') && !revoked.has(bearer))) {
+          return send(401, { error: 'unauthorized' }, {
+            'WWW-Authenticate': `Bearer error="invalid_request", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+          });
+        }
+        const message = JSON.parse(raw || '{}');
+        if (message.id === undefined) return send(202, '');
+        if (scopeChallenge && message.method === 'tools/call') {
+          return send(403, { error: 'insufficient_scope' }, {
+            'WWW-Authenticate': `Bearer error="insufficient_scope", scope="feed:read", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+          });
+        }
+        if (message.method === 'tools/call') toolCalls.push({ name: message.params?.name, arguments: message.params?.arguments });
+        const result = message.method === 'initialize'
+          ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'oauth-stub', version: '1' } }
+          : message.method === 'tools/list' ? { tools: [{ name: 'echo', inputSchema: { type: 'object' } }] } : {};
+        stream.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n\n`);
+        return send(202, '');
+      }
       if (req.url === '/mcp') {
         const bearer = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
         if (bearer.startsWith('access-') && !revoked.has(bearer)) {
           const message = JSON.parse(raw || '{}');
           if (message.id === undefined) return send(202, '');
+          if (scopeChallenge && message.method === 'tools/call') {
+            return send(403, { error: 'insufficient_scope' }, {
+              'WWW-Authenticate': `Bearer error="insufficient_scope", scope="feed:read", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
+            });
+          }
+          if (message.method === 'tools/call') toolCalls.push({ name: message.params?.name, arguments: message.params?.arguments });
           const result = message.method === 'initialize'
             ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'oauth-stub', version: '1' } }
             : message.method === 'tools/list' ? { tools: [{ name: 'echo', inputSchema: { type: 'object' } }] } : {};
@@ -154,6 +204,10 @@ export async function startAuthorizationStub({ failToken = false, confidential =
       if (req.url === '/token') {
         const form = new URLSearchParams(raw);
         forms.push(form);
+        // A revoked token that a refresh cannot repair is what parks a tool call.
+        if (failRefresh && form.get('grant_type') === 'refresh_token') {
+          return send(400, { error: 'invalid_grant', error_description: 'refresh token revoked' });
+        }
         // A confidential client must present the secret issued by its own
         // registration: mixing two clients' id and secret is rejected here, the
         // way a strict authorization server would reject it.
@@ -179,6 +233,7 @@ export async function startAuthorizationStub({ failToken = false, confidential =
         mcpUrl: `${base}/mcp`,
         forms,
         registrations,
+        toolCalls,
         revoked,
         async close() {
           server.closeAllConnections?.();
