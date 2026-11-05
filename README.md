@@ -247,6 +247,10 @@ The fields are the ones the editor already knows: `type`, `url`, `authMode`,
   the pasted document changes nothing. **Edit JSON** opens the current scope as a
   document and applies it as a whole, so it can create, update and delete; a
   deletion is listed in the preview and confirmed before anything is written.
+- **The preview follows the document.** It refreshes automatically a moment after
+  you stop typing (or change the target scope), so the apply button always
+  reflects the text on screen; before the first result it reads `Apply` without a
+  count rather than a misleading `Apply 0`.
 - **The preview decides nothing for you.** Every entry is classified `new`,
   `update`, `unchanged`, `conflict`, `invalid`, or (`Edit JSON` only) `delete`,
   with the changed fields and their before/after values. A name already used in

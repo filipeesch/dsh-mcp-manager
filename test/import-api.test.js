@@ -518,3 +518,28 @@ it('rejects a workspace file whose mcpServers is not an object', async (t) => {
   assert.equal(response.code, 400);
   assert.match(response.error, /mcpServers/);
 });
+
+it('classifies an untouched workspace seed as unchanged despite the derived cwd', async (t) => {
+  // The client seeds the dialog from GET /workspaces, whose stdio row carries
+  // the loader's default cwd (the workspace root). Submitting that document
+  // without edits must not look like an update.
+  const h = mount(t);
+  const ws = h.workspace('seed', {
+    mcpServers: { local: { type: 'stdio', command: 'npx', args: ['-y', 'pkg'] } },
+  });
+  const view = await h.workspaceView(ws.dir);
+  const server = view.servers.find((entry) => entry.name === 'local');
+  assert.equal(server.cwd, realpathSync(ws.dir), 'the view reports the derived root');
+  const document = {
+    local: { type: 'stdio', command: server.command, args: server.args, cwd: server.cwd },
+  };
+  const response = await h.request('POST', '/import', {
+    scope: 'workspace',
+    path: ws.dir,
+    mode: 'edit',
+    dryRun: true,
+    mcpServers: document,
+  });
+  assert.equal(response.code, 200, JSON.stringify(response));
+  assert.equal(response.plan.entries[0].action, 'unchanged', JSON.stringify(response.plan.entries[0]));
+});

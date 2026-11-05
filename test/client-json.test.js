@@ -259,6 +259,120 @@ it('discards a preview when the target scope changes', async () => {
   assert.doesNotMatch(text(tree), /will be deleted/);
 });
 
+it('previews automatically after a short delay when the dialog opens', async () => {
+  const timers = [];
+  let previews = 0;
+  const app = mountClient(router({
+    '/import': async () => { previews += 1; return response(planOf([entry({ name: 'github', action: 'unchanged' })])); },
+  }), 'en', { setTimeout: (fn) => { timers.push(fn); return timers.length; }, clearTimeout: () => {} });
+  app.render();
+  byLabel(app.render(), 'More actions').props.onClick({ stopPropagation() {} });
+  allByClass(app.render(), 'mm_menuItem').find((item) => text(item) === 'Edit JSON').props.onClick();
+  const node = componentOf(app.render(), (candidate) => typeof candidate.props.onApplied === 'function' && candidate.props.mode);
+  app.reset();
+  const props = { ...node.props, onApplied() {}, onClose() {} };
+  const tree = app.render(node.type, props);
+  assert.match(text(tree), /Apply/, 'the idle apply label carries no count');
+
+  app.effects();
+  assert.equal(timers.length, 1, 'opening the dialog schedules one debounced preview');
+  assert.equal(previews, 0, 'nothing is requested before the delay');
+  timers[0]();
+  await settle();
+  assert.equal(previews, 1, 'the debounce previews the document without a click');
+  assert.match(text(app.render(node.type, props)), /Unchanged github/);
+});
+
+it('editing the document invalidates the plan and the next preview enables apply', async () => {
+  let call = 0;
+  const app = await openList(router({
+    '/import': async () => {
+      call += 1;
+      return response(call === 1
+        ? planOf([entry({ name: 'github', action: 'unchanged' })])
+        : planOf([entry({ name: 'github', action: 'update', changes: [{ field: 'url', from: 'https://api.github.com/mcp', to: 'https://api.github.com/v2' }] })]));
+    },
+  }));
+  const dialog = openDialog(app);
+  let tree = dialog.render();
+  buttonByText(tree, 'Preview').props.onClick();
+  await settle();
+  tree = dialog.render();
+  assert.equal(nodes(tree).find((node) => node.props.className === 'mm_btn primary').props.disabled, true);
+  assert.match(text(nodes(tree).find((node) => node.props.className === 'mm_btn primary')), /Apply 0/);
+
+  // Editing drops the stale plan and shows the neutral label, never an
+  // "Apply 0" that looks like a computed result.
+  const textarea = nodes(tree).find((node) => node.props.className === 'mm_jsonText');
+  textarea.props.onChange({ target: { value: '{"mcpServers":{"github":{"type":"http","url":"https://api.github.com/v2","authMode":"oauth"}}}' } });
+  tree = dialog.render();
+  const idle = nodes(tree).find((node) => node.props.className === 'mm_btn primary');
+  assert.equal(idle.props.disabled, true);
+  assert.equal(text(idle), 'Apply');
+
+  buttonByText(tree, 'Preview').props.onClick();
+  await settle();
+  tree = dialog.render();
+  const apply = nodes(tree).find((node) => node.props.className === 'mm_btn primary');
+  assert.equal(apply.props.disabled, false);
+  assert.match(text(apply), /Apply 1/);
+});
+
+it('ignores a preview response that a newer request superseded', async () => {
+  const pending = [];
+  const app = await openList(router({
+    '/import': () => new Promise((resolve) => { pending.push(resolve); }),
+  }));
+  const dialog = openDialog(app);
+  let tree = dialog.render();
+  buttonByText(tree, 'Preview').props.onClick();
+  buttonByText(tree, 'Preview').props.onClick();
+  await settle();
+  assert.equal(pending.length, 2);
+
+  pending[1](response(planOf([entry({ name: 'second', action: 'new' })])));
+  await settle();
+  tree = dialog.render();
+  assert.match(text(tree), /New second/);
+
+  pending[0](response(planOf([entry({ name: 'first', action: 'new' })])));
+  await settle();
+  tree = dialog.render();
+  assert.match(text(tree), /New second/);
+  assert.doesNotMatch(text(tree), /New first/);
+});
+
+it('keeps the conflict choices while the document is edited', async () => {
+  let call = 0;
+  const app = await openList(router({
+    '/import': async () => {
+      call += 1;
+      return response(planOf([
+        entry({ name: 'shared', action: 'conflict', conflict: { scope: 'global', path: null, enabled: true } }),
+      ]));
+    },
+  }));
+  const dialog = openDialog(app);
+  let tree = dialog.render();
+  buttonByText(tree, 'Preview').props.onClick();
+  await settle();
+  tree = dialog.render();
+  nodes(tree).filter((node) => node.props.type === 'radio')[1].props.onChange();
+  tree = dialog.render();
+  assert.equal(nodes(tree).find((node) => node.props.className === 'mm_btn primary').props.disabled, false);
+
+  const textarea = nodes(tree).find((node) => node.props.className === 'mm_jsonText');
+  textarea.props.onChange({ target: { value: textarea.props.value.replace('api.github.com', 'api.github.com') } });
+  tree = dialog.render();
+  assert.equal(call, 1, 'no request was sent by the edit itself');
+  buttonByText(tree, 'Preview').props.onClick();
+  await settle();
+  tree = dialog.render();
+  assert.equal(call, 2);
+  assert.equal(nodes(tree).find((node) => node.props.className === 'mm_btn primary').props.disabled, false,
+    'the replace choice survived the edit');
+});
+
 it('localizes the menu and the dialog in both languages', async () => {
   const app = await openList(router());
   let tree = app.render();
