@@ -53,7 +53,7 @@ it('registers the banner above the composer and keeps the settings section', () 
   const options = app.slotOptions('conversation.input.dock');
   assert.equal(options.id, 'mcp-manager-auth');
   assert.equal(options.order, 10);
-  assert.equal(options.locale, 'mcp');
+  assert.equal(options.locale, undefined, 'the plugin does not register a locale namespace');
   assert.ok(app.slot('conversation.input.dock'), 'the banner component is registered');
 });
 
@@ -214,17 +214,14 @@ it('reports a failed start inline without dropping the row', async () => {
   assert.ok(button(tree, 'Cancel'), 'the control stays available');
 });
 
-it('localizes the banner in both languages', async () => {
+it('renders the banner in English', async () => {
   const { app, render } = mount(async () => listing([waiting()]));
   render();
   app.effects();
   await settle();
   assert.match(text(render()), /MCP authentication required/);
   assert.ok(button(render(), 'Authenticate'));
-  app.setLocale('zh');
-  assert.match(text(render()), /MCP 需要认证/);
-  assert.ok(button(render(), '去认证'));
-  assert.ok(button(render(), '取消'));
+  assert.ok(button(render(), 'Cancel'));
 });
 
 it('polls every two seconds and ticks the countdown every second', async () => {

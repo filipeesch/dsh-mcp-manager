@@ -1,8 +1,6 @@
 # dsh-mcp-manager
 
-[简体中文](README.zh-CN.md) | English
-
-> **0.21.0** adds in-conversation authentication: a tool call whose token expired now waits for a reauthorization in the chat instead of failing the turn. See the [release notes](docs/release-v0.21.0.md).
+> **0.22.0** keeps a server visible while it needs authentication: its last known tools stay registered, a call tells the model to authorize it, and `mcp_authenticate_server` starts that authorization from the conversation. The interface is English-only from this release. See the [release notes](docs/release-v0.22.0.md).
 
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
 
@@ -54,9 +52,9 @@ The built-in `@deepseek-ai/dsh-mcp-client` only accepts a static `headers` confi
 - **On-demand broker, enabled by default**: keep the model-facing MCP surface fixed at `mcp_search_tools`, `mcp_describe_tool`, and `mcp_execute_tool` instead of sending every `mcp__*` schema on every Native-mode request. A profile that never chose a value starts with it on; an explicit **off** is persisted and respected. `mcp_search_tools` is a zero-dependency lexical ranker (BM25 + CJK/alias/fuzzy, plus a catalog-listing fallback). Direct tools are hidden with the registry's `deferLoading` marker on DSH 0.2.2 and newer; `0.2.1` and older get the equivalent filter in the system-prompt waterfall.
 - **Stable tool refresh**: `notifications/tools/list_changed` refreshes only added, removed, or schema-changed registrations for both stdio and Streamable HTTP servers.
 
-The MCP UI follows DSH's language preference in **Settings → General → Language** through the `mcp` locale namespace. DSH owns browser fallback, preference persistence, and live language updates; the plugin has no separate language selector or language API. Labels, forms, status badges, and confirmations are translated; server-supplied diagnostics remain in their original language. Legacy `language` values in `~/.dsh/mcp-manager.json` are ignored and left untouched.
+The MCP UI is **English-only**: one string table inside the client, resolved by the plugin's own `t`, never the host locale namespace and never DSH's **Settings → General → Language**. The client injects only `slots`. Server-supplied diagnostics (MCP error text, tool descriptions) stay in the language they were produced in. Legacy `language` values in `~/.dsh/mcp-manager.json` are ignored and left untouched.
 
-Version 0.11.0 requires `@deepseek-ai/dsh-client-locale` and the slot system's locale `t` prop. The compatibility runs listed below predate this integration and do not verify live locale switching on every listed DSH release. Recheck Settings → MCP while switching DSH's language before deploying to an older web profile.
+Since 0.22.0 the plugin no longer depends on `@deepseek-ai/dsh-client-locale`; the compatibility runs listed below predate the earlier integration and never verified live language switching on every listed DSH release.
 
 ## Requirements
 
@@ -192,6 +190,32 @@ The same state is available over the plugin API: `GET /mcp-manager/api/attention
 (`serverId`, `sessionId`, `scope`, `workspacePath`, `name`, `reason`, `error`, `phase`, `pending`, `remainingMs`),
 and `POST /mcp-manager/api/attention/cancel` with `{ sessionId, serverId }` releases one session's calls. Neither
 response contains a token, a client secret or the authorization URL.
+
+### Tools of a server that needs authentication
+
+A server that cannot authenticate at connect time does not disappear from the agent's view. The host keeps the raw
+`tools/list` entries of each server's last successful listing in a sidecar file,
+`~/.dsh/mcp-manager-tools.json` (no tokens, safe to delete, rewritten on the next successful listing), and while the
+connection reports `needs-auth` it registers those entries under the server's usual public names. The definitions carry
+the server's own description and input schema, so the model sees the same catalog it saw when the server was live.
+
+- A call to one of them fails immediately — no wait, no attention entry — with an error that names the server and tells
+  the model to call `mcp_authenticate_server("<server>")`. A `static` or stdio server keeps its own message and is told
+  to update the token or command in Settings → MCP.
+- `mcp_authenticate_server({ server })` is registered while at least one configured server uses browser authorization
+  (global or in a workspace). It starts the same authorization Settings → MCP starts, opens the URL in the system
+  browser, and returns at once with the URL and an instruction to finish there. Over SSH it never opens a browser and
+  only returns the URL. A second call while a flow is pending returns the running flow's URL instead of opening a
+  parallel one. It never enables a disabled server, never changes configuration, and never opens a URL the plugin did
+  not create.
+- When the authorization completes and the server reconnects, the host tells the model once, through dynamic model
+  context, that the server's tools are available again. The notice is current for exactly one step — the prompt
+  assembly and its request-admission refresh both see it — and it is retired when the next step begins, so it never
+  repeats.
+- A server that never completed a listing has no catalog, so it stays invisible until it authenticates — there is
+  nothing honest to show.
+- The Settings card reports the retained names with a **stale** badge until the server reconnects; the tool inventory
+  endpoint answers `200 { tools, stale: true }` for that case and keeps `409` for a server without a catalog.
 
 ### What the agent sees
 
@@ -346,7 +370,7 @@ attempts cannot restore tools or clear a newer connection.
 | On-demand broker | A profile setting installs three broker tools; on DSH `0.2.2+` raw `mcp__*` definitions stay registered with `deferLoading` (the provider adapter hides them), older harnesses filter the system-prompt waterfall; an execution guard admits only `mcp_execute_tool` (and PTC programs, whose executor owns prompt sections) |
 | Tool list changes | stdio notifications and the Streamable HTTP SSE channel refresh the live `tools/list`; unchanged registrations remain mounted |
 | Auth wait | A `tools/call` rejected with `401`/`403 insufficient_scope` that a refresh cannot repair throws `AuthRequiredError`; for an OAuth server the call waits in `lib/auth/gate.js` (budget `config.authWaitMs`) and is retried once after the reconnect. Static/stdio servers fail immediately, connection-time failures never wait, and `GET /attention` reports only the waiting calls per session |
-| In-conversation banner | The client half registers `conversation.input.dock` (order 10, locale `mcp`), polls `/attention` every 2 seconds, filters by the session and its workspace, and shares the start-authorization helper with the two Settings rows |
+| In-conversation banner | The client half registers `conversation.input.dock` (order 10), polls `/attention` every 2 seconds, filters by the session and its workspace, and shares the start-authorization helper with the two Settings rows |
 | Workspace isolation | `agents.create`/`resume` are decorated to compose a per-agent setup that registers `<workspace>/.dsh/dshmm/mcp.json` tools into the agent scope and applies `tools.restrict({ deny })` for `exclude`/`disabled` global names; a `disabled` workspace-local server stays declared but is neither connected nor registered |
 | Harness compatibility | The composed agent setup takes the Agent from the setup callback's explicit second argument (DSH 0.1.5-alpha.1 and later) and only falls back to the legacy `agent` context accessor. Newer harness builds removed that accessor, so reading `ctx.agent` there throws `cannot get property "agent" without inject` and fails every `agents.resume`/`create`. The GUI webserver is injected lazily, so a profile without one keeps its MCP tools instead of leaving a pending entry |
 | Hot path | Same-origin JSON API under `/mcp-manager/api/*` between the settings page and the host half |
@@ -388,9 +412,9 @@ For v0.15.0, `test/oauth-scope.test.js` covers the scope-selection order
 authorize and token requests, recovery from a bare 403 and from
 `insufficient_scope` on both transports, and the case where the 403 challenge
 names only the missing scopes — the step-up must extend the advertised base, not
-replace it. `test/client-language.test.js` renders the localized
+replace it. `test/client-language.test.js` renders the
 insufficient-scope message and the **Re-authenticate with scopes** button for
-the global and workspace row shapes in both locales. A real
+the global and workspace row shapes. A real
 TryPost/Laravel-Passport browser consent round trip and Windows remain
 unverified; see [v0.15.0 verification](docs/release-v0.15.0.md). This does not
 expand the compatibility matrix.
@@ -415,8 +439,7 @@ server that stays declared but never connects or registers, the
 `/workspaces/server-state` toggle applying to existing **and** new agents of that
 workspace, hot reload after a file edit, an unknown name being ignored, and
 unknown keys surviving the write. `test/client-language.test.js` renders the
-switch for both row shapes and asserts the endpoint contract; the bilingual
-dictionary parity test covers the new strings. A live browser click-through and
+switch for both row shapes and asserts the endpoint contract. A live browser click-through and
 Windows remain unverified; see [v0.16.0 verification](docs/release-v0.16.0.md).
 This does not expand the DSH compatibility matrix.
 
@@ -459,8 +482,8 @@ Next gate: a real-profile readback (resolved version, running process, visible S
 
 For v0.14.0, `test/tool-timeout.test.js` covers budget validation, large-timer
 overflow, configuration round trips, workspace rescans, and actual timeout and
-success paths over all three transports. The client test covers both locales,
-transports, and scopes. `node scripts/verify-timeout-dsh.mjs <prefix>` runs the
+success paths over all three transports. The client test covers the three
+transports and both scopes. `node scripts/verify-timeout-dsh.mjs <prefix>` runs the
 real DSH 0.2.1-rc.2 Loader, agents, tool registry, and native-mode broker against
 loopback MCP fixtures: all three transports and the broker complete 61-second
 calls with a 65-second budget, then clearing overrides restores the tested

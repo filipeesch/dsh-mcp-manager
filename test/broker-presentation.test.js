@@ -31,6 +31,8 @@ function mount(t) {
       },
     },
     on(event, fn) {
+      // The plugin also follows agent steps to retire an authorization notice.
+      if (event === 'agent/pre-step') return () => {};
       assert.equal(event, 'system-prompt/assemble');
       assemble = fn;
       return () => { assemble = undefined; };

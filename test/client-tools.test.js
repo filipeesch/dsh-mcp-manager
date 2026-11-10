@@ -246,7 +246,7 @@ it('shows the workspace card with its own connection and fetches that id', async
   assert.doesNotMatch(text(card), /global_tool/);
 });
 
-it('renders the tool labels and states in both languages', async () => {
+it('renders the tool heading and the state messages in English', async () => {
   const page = mountPage({ servers: [server()], tools: () => ({ tools: ['alpha'] }) });
   const tree = await ready(page);
   const row = rowFor(tree, 'srv-1');
@@ -255,18 +255,71 @@ it('renders the tool labels and states in both languages', async () => {
   const expanded = rowFor(page.app.render(), 'srv-1');
 
   page.app.reset();
-  let card = page.app.render(expanded.type, { ...expanded.props, open: true });
+  const card = page.app.render(expanded.type, { ...expanded.props, open: true });
   assert.match(text(card), /Tools: 1/);
-  page.app.setLocale('zh');
-  card = page.app.render(expanded.type, { ...expanded.props, open: true });
-  assert.match(text(card), /1 个工具/);
 
   page.app.reset();
   const disabled = page.app.render(expanded.type, {
     ...expanded.props, open: true, tools: undefined,
     server: server({ status: 'disabled', disabled: true }),
   });
-  assert.match(text(disabled), /该服务器已禁用/);
+  assert.match(text(disabled), /This server is disabled/);
+});
+
+it('shows the retained names with a stale badge while authentication is required', async () => {
+  const page = mountPage({
+    servers: [server({ status: 'needs-auth' })],
+    tools: () => ({ tools: ['alpha', 'zebra'], stale: true }),
+  });
+  const tree = await ready(page);
+  const row = rowFor(tree, 'srv-1');
+  row.props.onToggle();
+  await settle(); await settle();
+  const expanded = rowFor(page.app.render(), 'srv-1');
+
+  page.app.reset();
+  const card = page.app.render(expanded.type, { ...expanded.props, open: true });
+  assert.match(text(card), /Tools: 2/);
+  assert.match(text(card), /alpha/);
+  assert.match(text(card), /zebra/);
+  assert.match(text(card), /Cached from the last successful listing/);
+});
+
+it('shows the authentication message when a server in needs-auth has no catalog', async () => {
+  const page = mountPage({
+    servers: [server({ status: 'needs-auth' })],
+    toolsFetch: () => response({ error: 'server is not connected' }, false, 409),
+  });
+  const tree = await ready(page);
+  const row = rowFor(tree, 'srv-1');
+  row.props.onToggle();
+  await settle(); await settle();
+  const expanded = rowFor(page.app.render(), 'srv-1');
+
+  page.app.reset();
+  const card = page.app.render(expanded.type, { ...expanded.props, open: true });
+  assert.match(text(card), /Authentication required/);
+  assert.doesNotMatch(text(card), /Cached from the last successful listing/);
+  assert.doesNotMatch(text(card), /Could not load the tool list/);
+});
+
+it('reports a failed inventory read for a server in needs-auth instead of hiding it', async () => {
+  const page = mountPage({
+    servers: [server({ status: 'needs-auth' })],
+    toolsFetch: () => response({ error: 'internal error' }, false, 500),
+  });
+  const tree = await ready(page);
+  const row = rowFor(tree, 'srv-1');
+  row.props.onToggle();
+  await settle(); await settle();
+  const expanded = rowFor(page.app.render(), 'srv-1');
+
+  page.app.reset();
+  const card = page.app.render(expanded.type, { ...expanded.props, open: true });
+  assert.match(text(card), /Could not load the tool list/);
+  // The status chip still says "Authentication required"; the tool section must
+  // not pretend the server simply has no catalog to show.
+  assert.doesNotMatch(text(card), /Authenticate to see this server's tools/);
 });
 
 it('places the add action in the search toolbar and removes it from the header', async () => {
@@ -277,13 +330,7 @@ it('places the add action in the search toolbar and removes it from the header',
   const addInToolbar = nodes(toolbar).find((node) => node.type === 'button' && node.props['aria-label'] === 'Add MCP server');
   assert.ok(addInToolbar, 'the add action shares the toolbar with the search');
   assert.equal(addInToolbar.props.className, 'mm_addBtn');
-  page.app.setLocale('zh');
   tree = page.app.render();
-  const zhAdd = nodes(tree).find((node) => node.type === 'button' && node.props.className === 'mm_addBtn');
-  assert.equal(zhAdd.props['aria-label'], '添加 MCP 服务器');
-  page.app.setLocale('en');
-  tree = page.app.render();
-  assert.ok(!nodes(tree).some((node) => node.type === 'button' && node.props.className === 'mm_addBtn' && node.props['aria-label'] === '添加 MCP 服务器'));
   const heading = nodes(tree).find((node) => node.props?.className === 'mm_catalogHeading');
   assert.ok(!nodes(heading).some((node) => node.type === 'button'), 'the header no longer offers the add action');
 

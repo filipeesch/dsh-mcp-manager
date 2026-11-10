@@ -148,12 +148,3 @@ A new waiting call and a completed authorization SHALL be reflected in the banne
 
 - **WHEN** a new call starts waiting while the conversation is open
 - **THEN** its row appears without a page reload
-
-### Requirement: Localized copy
-
-Every user-visible string the banner introduces SHALL exist in both supported interface languages and SHALL render in the language selected in the application's language setting. Host and provider diagnostic text shown in a row stays in the language it was produced in.
-
-#### Scenario: Both languages are complete
-
-- **WHEN** the interface language is switched between the two supported languages
-- **THEN** the banner heading, the actions, the phase texts, the countdown label and the accessible labels are presented in the selected language with no untranslated key shown

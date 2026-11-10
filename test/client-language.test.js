@@ -1,3 +1,11 @@
+/**
+ * The client half's single interface language, plus the Settings → MCP rendering
+ * contract it shares with the other client suites.
+ *
+ * The plugin ships one language: every string comes from its own English table,
+ * and the page never asks the host for a language or registers a locale
+ * namespace.
+ */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { it } from 'node:test';
@@ -12,48 +20,34 @@ import {
 } from './helpers/client-harness.js';
 
 
-it('registers balanced mcp dictionaries with effect cleanup and the locale slot seat', () => {
+it('seats the settings section with the plugin own translator and no locale dependency', () => {
   const app = mount(async () => response({}));
-  assert.deepEqual(Object.keys(app.dictionaries.zh).sort(), Object.keys(app.dictionaries.en).sort());
   assert.equal(app.spec.name, 'settings.section');
-  assert.equal(app.spec.locale, 'mcp');
+  assert.equal(app.spec.locale, undefined, 'the plugin no longer registers a locale namespace');
   assert.equal(app.spec.label(), 'MCP');
-  assert.ok(app.inject.includes('locale'));
+  assert.deepEqual([...app.inject], ['slots']);
   const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.ok(pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'));
-  assert.deepEqual(app.effectLabels, ['dsh-mcp-manager: dictionaries']);
-  for (const key of [...source.matchAll(/\bt\("([\w-]+)"/g)].map((match) => match[1])) {
-    for (const locale of ['zh', 'en']) assert.ok(app.dictionaries[locale][key], locale + ': ' + key);
-  }
-  assert.doesNotMatch(source.slice(source.indexOf('function api')), /\p{Script=Han}/u);
+  assert.ok(!pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'), 'the client no longer depends on the locale bundle');
+  assert.match(source, /const inject = \["slots"\];/);
+  assert.doesNotMatch(source, /\p{Script=Han}/u);
   assert.doesNotMatch(source, /STRINGS|translator|systemLanguage|navigator|settings\/language|mm_language/);
   app.dispose();
 });
 
-it('renders the injected t and follows locale changes without plugin language requests', async () => {
+it('renders every string from the plugin table and never asks the host for a language', async () => {
   const calls = [];
   const app = mount(async (url) => { calls.push(url); return response({}); });
   let tree = app.render();
   assert.match(text(tree), /MCP servers/);
   app.effects(); await settle();
-  app.setLocale('zh');
   tree = app.render();
-  assert.match(text(tree), /MCP 服务器/);
   assert.equal(calls.filter((url) => url.endsWith('/settings')).length, 1);
-  assert.ok(calls.every((url) => !url.includes('/settings/language')));
-  // An arbitrary standard-seat translator reaches the content and nested forms.
-  tree = app.render(undefined, { t: (key) => 'seat:' + key });
-  assert.match(text(tree), /seat:servers/);
-  nodes(tree).find((node) => node.props['aria-label'] === 'seat:addServer').props.onClick();
-  const form = content(app.render(undefined, { t: (key) => 'seat:' + key }));
-  assert.equal(form.props.t('save'), 'seat:save');
+  assert.ok(calls.every((url) => !url.includes('/settings/language')), 'the page never requests a language');
 });
 
-it('explains the full-catalog Code/PTC fallback in both locales', () => {
+it('explains the full-catalog Code/PTC fallback', () => {
   const app = mount(async () => response({}));
   assert.match(text(app.render()), /Code\/PTC\/both keeps the full MCP catalog/);
-  app.setLocale('zh');
-  assert.match(text(app.render()), /Code\/PTC\/both 模式保留完整 MCP 目录/);
   app.dispose();
 });
 
@@ -160,8 +154,6 @@ it('edits and clears tool-call timeouts for both transports and scopes', async (
         assert.equal(JSON.parse(submitted.options.body).timeout, value);
         assert.ok(submitted.url.endsWith(scope === 'workspace' ? '/workspaces/servers' : '/servers/test'));
       }
-      app.setLocale('zh');
-      assert.match(text(app.render(form.type, props)), /工具调用超时/);
     }
   }
 });
@@ -217,7 +209,7 @@ it('shows a collapsed connection error and lazily loads the attempt log', async 
   assert.ok(panelAt > actionsAt, 'the log panel renders after the action row');
 });
 
-it('shows the localized insufficient-scope message and a scoped re-auth button', async () => {
+it('shows the insufficient-scope message and a scoped re-auth button', async () => {
   const globalServer = {
     id: 'srv-scope', name: 'trypost', type: 'http', url: 'https://post.mrbean.dev/mcp/trypost',
     authMode: 'oauth', status: 'needs-auth', toolCount: 0, enabled: true,
@@ -261,12 +253,8 @@ it('shows the localized insufficient-scope message and a scoped re-auth button',
   assert.equal(authChip(row).props['aria-label'], 'Authenticate: trypost', 'the status chip is the auth action');
 
   // Workspace rows carry the same data top-level and follow the same locale.
-  app.setLocale('zh');
   row = renderRow(workspaceNode);
-  assert.match(text(row), /权限范围不足：令牌缺少所需的 scope \(posts:write\)。/);
-  assert.equal(authChip(row).props['aria-label'], '去认证: ws-trypost');
 
-  app.setLocale('en');
   row = renderRow(expanded);
   assert.match(text(row), /Insufficient scope: the token lacks the required scope \(mcp:use\)\./);
 });
@@ -724,7 +712,7 @@ it('shows the automatic notice for an override without a port on the card', asyn
   assert.match(text(details), /manual Client ID needs a fixed URI/);
 });
 
-it('localizes the callback section in both languages', async () => {
+it('renders the callback section labels and status line', async () => {
   const settings = {
     onDemandToolInjection: false,
     oauthCallback: { mode: 'fixed', host: 'localhost', port: 8765, path: '/callback' },
@@ -744,8 +732,5 @@ it('localizes the callback section in both languages', async () => {
   app.reset();
   let section = app.render(sectionEl.type, sectionEl.props);
   assert.match(text(section), /OAuth callback/);
-  app.setLocale('zh');
   section = app.render(sectionEl.type, sectionEl.props);
-  assert.match(text(section), /OAuth 回调/);
-  assert.match(text(section), /固定地址/);
 });
