@@ -12,7 +12,7 @@ The host SHALL expose `GET /mcp-manager/api/servers/:id/tools`, returning `{ too
 
 The response SHALL describe only the server's own connection: a global server reports the global connection's tools, and a workspace server reports the connection of that workspace.
 
-For a server that is not connected — `needs-auth`, `error`, `disabled`, `connecting`, `configured`, `conflict`, or a row projected from disk — the endpoint SHALL answer `409` with an error message and MUST NOT return a tool list. An unknown id SHALL answer `404`.
+For a server that is not connected — `error`, `disabled`, `connecting`, `configured`, `conflict`, or a row projected from disk — the endpoint SHALL answer `409` with an error message and MUST NOT return a tool list. A `needs-auth` server that retains a tool catalog SHALL answer `200` with that catalog and SHALL mark the response as stale; a `needs-auth` server without a catalog SHALL answer `409` like the other disconnected states. An unknown id SHALL answer `404`.
 
 The polled list endpoints `GET /servers` and `GET /workspaces` SHALL remain count-only: they MUST NOT carry tool names, and their payload size MUST NOT grow with the number of tools a server registers.
 
@@ -33,7 +33,17 @@ The polled list endpoints `GET /servers` and `GET /workspaces` SHALL remain coun
 
 #### Scenario: A server that needs authentication has no inventory
 
-- **WHEN** the requested server is `needs-auth`, `error`, `disabled`, `connecting`, or `conflict`
+- **WHEN** the requested server is `needs-auth` and no catalog is retained for it
+- **THEN** the endpoint answers `409` and returns no tool list
+
+#### Scenario: A server that needs authentication reports its cached names
+
+- **WHEN** the requested server is `needs-auth` and a catalog is retained for it
+- **THEN** the endpoint answers `200` with the retained names marked as stale
+
+#### Scenario: A server in error returns no inventory
+
+- **WHEN** the requested server is `error`, `disabled`, `connecting`, or `conflict`
 - **THEN** the endpoint answers `409` and returns no tool list
 
 #### Scenario: Unknown id is rejected
@@ -52,7 +62,7 @@ The names returned SHALL be the server's raw `tools/list` names, the same names 
 
 The response SHALL be ordered by ascending name, independent of the order in which the server listed the tools, and SHALL NOT contain duplicate names. A connected server that registered no tools SHALL return an empty array rather than an error.
 
-The endpoint SHALL read the live registration state. Names from a previous connection MUST NOT be returned after a disconnect, and a connect, reconnect, edit, or `tools/list` change SHALL be visible on the next request without restarting the host.
+The endpoint SHALL read the live registration state of a connected server: names from a previous connection MUST NOT be returned for a connected server after a reconnect, and a connect, reconnect, edit, or `tools/list` change SHALL be visible on the next request without restarting the host. For a `needs-auth` server the endpoint SHALL read the retained catalog instead, and SHALL report it as stale.
 
 #### Scenario: Names are raw
 
@@ -73,3 +83,24 @@ The endpoint SHALL read the live registration state. Names from a previous conne
 
 - **WHEN** a server reconnects and now exposes a different tool set
 - **THEN** the next request returns the new set and the removed names are gone
+
+### Requirement: A cached inventory is reported as stale
+
+A tool list served for a `needs-auth` server SHALL be marked stale in the response, so no caller can mistake it for a live inventory. The marker SHALL be present exactly when the list comes from a retained catalog, and MUST NOT appear for a connected server.
+
+The list SHALL keep the rules of a live inventory: raw `tools/list` names, ascending order, no duplicates, and an empty array when the retained catalog holds no entry.
+
+#### Scenario: The stale marker is present
+
+- **WHEN** the endpoint answers for a `needs-auth` server with a retained catalog
+- **THEN** the response is marked stale
+
+#### Scenario: A live inventory is not stale
+
+- **WHEN** the endpoint answers for a connected server
+- **THEN** the response is not marked stale
+
+#### Scenario: Ordering and raw names still hold
+
+- **WHEN** a retained catalog holds `zebra`, `alpha` and `middle`
+- **THEN** the endpoint answers `["alpha", "middle", "zebra"]` and never a public `mcp__` name

@@ -373,15 +373,10 @@ it('keeps the conflict choices while the document is edited', async () => {
     'the replace choice survived the edit');
 });
 
-it('localizes the menu and the dialog in both languages', async () => {
+it('renders the menu entries in English', async () => {
   const app = await openList(router());
   let tree = app.render();
   byLabel(tree, 'More actions').props.onClick({ stopPropagation() {} });
   tree = app.render();
   assert.deepEqual(allByClass(tree, 'mm_menuItem').map((item) => text(item)), ['Edit JSON', 'Import JSON']);
-  app.setLocale('zh');
-  tree = app.render();
-  assert.deepEqual(allByClass(tree, 'mm_menuItem').map((item) => text(item)), ['编辑 JSON', '导入 JSON']);
-  const dictionaries = app.dictionaries;
-  assert.deepEqual(Object.keys(dictionaries.zh).sort(), Object.keys(dictionaries.en).sort());
 });

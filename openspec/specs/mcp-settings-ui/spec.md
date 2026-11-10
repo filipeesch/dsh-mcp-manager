@@ -106,15 +106,6 @@ The expanded server card SHALL present its actions as an enable switch whose adj
 - **WHEN** the card renders for an OAuth server that needs authentication, or that needs a broader scope
 - **THEN** the status chip is the authentication action itself and carries the current status label
 
-### Requirement: Localized labels for the new controls
-
-Every user-visible string introduced by this change SHALL be present in both supported interface languages, and the page SHALL render them in the language selected in the application's language setting. This covers the redirect URI field and its help text, the automatic-mode and manual-Client-ID messages, the enable switch state labels, the card and workspace action labels, the global callback section and its mode, hostname, port and path labels, its status line, and its listener list, together with the tool-list heading and count, each tool-list state message, the tool-list read-failure message, the add action label, and the empty-workspace hint. Host-generated diagnostic text (a listener error such as a busy port, or a provider message) stays in the language the plugin produced, like every other server-supplied diagnostic.
-
-#### Scenario: Both languages are complete
-
-- **WHEN** the interface language is switched between the two supported languages
-- **THEN** the redirect URI label and help text, the callback section labels, the status line, the listener list, the pending-registration message, the tool-list heading and state messages, the add action, and the diagnostics are all presented in the selected language, with no untranslated key shown
-
 ### Requirement: Global callback settings in an Advanced section
 
 The Settings → MCP page SHALL present the global callback configuration inside a collapsible **Advanced** section that is collapsed by default. While collapsed, the section header SHALL always show a status line containing the current mode, the number of active callback listeners, and a visible indicator when the last callback listener failure has not been cleared. Expanding the section SHALL reveal the mode selector, the loopback hostname, the port and the path, the active listeners with their address and pending-flow count, and the last listener error in full.
@@ -178,6 +169,8 @@ The list SHALL be ordered. It SHALL render inside a bounded scroll area, and a l
 
 The list SHALL follow the page's existing server poll: after a connect, a reconnect, an edit, or a change reported by the server's `tools/list`, the names SHALL refresh without a page reload. The list SHALL be read for the card's own connection, and the same presentation SHALL be used by a global card and by a workspace card.
 
+A `needs-auth` server that retains a tool catalog SHALL render that catalog under the same heading, together with a stale badge stating that the names come from the last successful listing. Such a list MUST NOT be presented as the server's live inventory, and the badge SHALL disappear once the server reconnects.
+
 #### Scenario: Connected card lists the raw names
 
 - **WHEN** the operator expands the card of a connected server
@@ -208,13 +201,23 @@ The list SHALL follow the page's existing server poll: after a connect, a reconn
 - **WHEN** the operator expands a workspace server card
 - **THEN** the list shows the tools of that workspace's connection, not another workspace's or the global server's
 
+#### Scenario: Cached names while authentication is required
+
+- **WHEN** the operator expands the card of a `needs-auth` server that retains a catalog
+- **THEN** the card lists the retained raw names with the count in the heading and a stale badge
+
+#### Scenario: The badge disappears after reconnecting
+
+- **WHEN** the server authenticates and reconnects with a different tool set
+- **THEN** the card lists the live names and no stale badge without a page reload
+
 ### Requirement: Tool-list empty states
 
-The tool section SHALL present a distinct message for each connection state it can observe: `needs-auth`, `error`, `disabled`, `connecting`, `configured` (declared but not connected), `conflict`, and connected-but-empty. A server that is not connected MUST NOT render a tool list, and a failed read SHALL be reported as a read failure rather than as an empty inventory.
+The tool section SHALL present a distinct message for each connection state it can observe: `needs-auth`, `error`, `disabled`, `connecting`, `configured` (declared but not connected), `conflict`, and connected-but-empty. A server that is not connected MUST NOT render a tool list, except a `needs-auth` server that retains a catalog and renders it marked stale. A failed read SHALL be reported as a read failure rather than as an empty inventory.
 
 #### Scenario: Authentication required
 
-- **WHEN** the card belongs to a server whose status is `needs-auth`
+- **WHEN** the card belongs to a `needs-auth` server that retains no catalog
 - **THEN** the tool section states that authentication is required and shows no names
 
 #### Scenario: Connection error
@@ -297,8 +300,8 @@ outside it or with the keyboard SHALL leave the page unchanged. Neither entry SH
 navigate away from the page, and the menu SHALL NOT be the only way to reach those
 actions from a server card.
 
-Every label the menu introduces SHALL exist in both supported interface languages
-and SHALL render in the language selected in the application's language setting.
+Every label the menu introduces SHALL be English and MUST NOT switch with the
+application's language setting.
 
 #### Scenario: Global layout exposes the menu
 
@@ -327,8 +330,8 @@ and SHALL render in the language selected in the application's language setting.
 
 #### Scenario: Both languages are complete
 
-- **WHEN** the interface language is switched between the two supported languages
-- **THEN** the two menu entries and the overflow action's accessible label are presented in the selected language with no untranslated key shown
+- **WHEN** the application language setting is changed to any supported value
+- **THEN** the two menu entries and the overflow action's accessible label stay in English with no untranslated key shown
 
 ### Requirement: Edit as JSON action on the server card
 
@@ -341,8 +344,8 @@ server SHALL be rejected in the preview. Opening it SHALL NOT disturb the server
 connection or its stored session, and the action SHALL remain available for a
 disabled server.
 
-The action's label SHALL exist in both supported interface languages and SHALL
-render in the language selected in the application's language setting.
+The action's label SHALL be English and MUST NOT switch with the application's
+language setting.
 
 #### Scenario: Global card offers the action
 

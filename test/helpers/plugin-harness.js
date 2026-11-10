@@ -8,9 +8,20 @@
  */
 import assert from 'node:assert/strict';
 
-export function mountPlugin(mod, { config = {}, workspacePaths = [] } = {}) {
+export function mountPlugin(mod, { config = {}, workspacePaths = [], systemPrompt } = {}) {
   let handler;
   const cleanup = [];
+  const warnings = [];
+  const listeners = new Map();
+  const on = (name, listener) => {
+    const set = listeners.get(name) ?? new Set();
+    set.add(listener);
+    listeners.set(name, set);
+    return () => { set.delete(listener); };
+  };
+  const emit = (name, payload) => {
+    for (const listener of listeners.get(name) ?? []) listener(payload);
+  };
   const globalTools = new Map();
   const agents = [];
   const effect = (fn) => {
@@ -43,12 +54,14 @@ export function mountPlugin(mod, { config = {}, workspacePaths = [] } = {}) {
   };
   const webServer = { register: (route) => { handler = route.handler; return () => { handler = undefined; }; } };
   mod.apply({
-    logger: { info() {}, warn() {}, error() {} },
+    logger: { info() {}, warn(line) { warnings.push(String(line)); }, error() {} },
     tools: registryFor(globalTools),
-    get: (name) => (name === 'workspaceRegistry' && workspacePaths.length
-      ? { list: () => workspacePaths.map((path) => ({ path })) }
-      : undefined),
-    on: () => () => {},
+    get: (name) => {
+      if (name === 'systemPrompt') return systemPrompt;
+      if (name === 'workspaceRegistry' && workspacePaths.length) return { list: () => workspacePaths.map((path) => ({ path })) };
+      return undefined;
+    },
+    on,
     inject: (names, callback) => {
       if (typeof callback !== 'function') return { dispose: () => {} };
       if (names.includes('webServer')) callback({ webServer, get: () => undefined, effect });
@@ -85,6 +98,8 @@ export function mountPlugin(mod, { config = {}, workspacePaths = [] } = {}) {
     request,
     globalTools,
     agents,
+    warnings,
+    emit,
     tool(name) { return globalTools.get(name); },
     /**
      * Open a workspace agent, which installs that workspace's MCP servers and
