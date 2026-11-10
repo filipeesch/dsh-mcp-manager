@@ -22,6 +22,17 @@ export function mountPlugin(mod, { config = {}, workspacePaths = [], systemPromp
   const emit = (name, payload) => {
     for (const listener of listeners.get(name) ?? []) listener(payload);
   };
+  // Cordis waterfall: listeners compose around the innermost callback, run
+  // outermost-first, and a listener that does not call next() vetoes the chain.
+  const waterfall = (name, payload, inner) => {
+    const chain = [...(listeners.get(name) ?? [])];
+    const dispatch = (index) => {
+      const listener = chain[index];
+      if (listener === undefined) return inner();
+      return listener(payload, () => dispatch(index + 1));
+    };
+    return dispatch(0);
+  };
   const globalTools = new Map();
   const agents = [];
   const effect = (fn) => {
@@ -100,6 +111,7 @@ export function mountPlugin(mod, { config = {}, workspacePaths = [], systemPromp
     agents,
     warnings,
     emit,
+    waterfall,
     tool(name) { return globalTools.get(name); },
     /**
      * Open a workspace agent, which installs that workspace's MCP servers and

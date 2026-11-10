@@ -279,14 +279,15 @@ it('keeps the notice through the admission refresh and retires it at the next st
 
   // The authorization completed while a tool call was running; the step that
   // follows it is the one that carries the notice.
-  app.emit('agent/pre-step', { agent, turn: 1, step: 1 });
+  const step = async () => app.waterfall('agent/pre-step', { agent, turn: 1, step: 1 }, async () => ({ kind: 'enter' }));
+  assert.deepEqual(await step(), { kind: 'enter' }, 'the waterfall decision must survive the listener');
   // DSH assembles the prompt and then re-evaluates every context provider for
   // request admission: the notice must survive both reads of the same step.
   assert.match(provider.text({ agent }), /MCP server "atlas" is authenticated/);
   assert.match(provider.text({ agent }), /MCP server "atlas" is authenticated/);
 
   // The next step begins: the notice is no longer current.
-  app.emit('agent/pre-step', { agent, turn: 1, step: 2 });
+  assert.deepEqual(await step(), { kind: 'enter' });
   assert.equal(provider.text({ agent }), '');
 });
 

@@ -1,5 +1,7 @@
 # dsh-mcp-manager
 
+> **0.22.2** fixes every turn failing with `Cannot read properties of undefined (reading 'kind')`: the `agent/pre-step` observer now forwards the waterfall instead of vetoing it. See the [release notes](docs/release-v0.22.2.md).
+>
 > **0.22.1** hardens activation: a failure to register the authorization tool can no longer abort the plugin, and `Settings → MCP` now reports a host read failure instead of an empty catalog. See the [release notes](docs/release-v0.22.1.md).
 >
 > **0.22.0** keeps a server visible while it needs authentication: its last known tools stay registered, a call tells the model to authorize it, and `mcp_authenticate_server` starts that authorization from the conversation. The interface is English-only from this release. See the [release notes](docs/release-v0.22.0.md).
