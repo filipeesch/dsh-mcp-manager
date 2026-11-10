@@ -14,11 +14,11 @@ const server = (overrides = {}) => ({
   ...overrides,
 });
 
-function mountPage({ servers = [], workspaces = [], settings = {}, tools = () => ({ tools: [] }), toolsFetch } = {}) {
+function mountPage({ servers = [], workspaces = [], settings = {}, tools = () => ({ tools: [] }), toolsFetch, serversResponse } = {}) {
   const calls = [];
   const app = mount(async (url) => {
     calls.push(url);
-    if (url.endsWith('/servers')) return response({ servers });
+    if (url.endsWith('/servers')) return serversResponse ?? response({ servers });
     if (url.endsWith('/workspaces')) return response({ workspaces });
     if (url.endsWith('/settings')) return response(settings);
     if (/\/servers\/[^/]+\/tools$/.test(url)) return toolsFetch ? toolsFetch(url) : response(tools(url));
@@ -320,6 +320,14 @@ it('reports a failed inventory read for a server in needs-auth instead of hiding
   // The status chip still says "Authentication required"; the tool section must
   // not pretend the server simply has no catalog to show.
   assert.doesNotMatch(text(card), /Authenticate to see this server's tools/);
+});
+
+it('says the host could not be read instead of showing an empty catalog', async () => {
+  // A host half that is not loaded answers 404 to its own API; an empty catalog
+  // must not be presented as "all servers are gone".
+  const page = mountPage({ serversResponse: response({ error: 'server not found' }, false, 500) });
+  const tree = await ready(page);
+  assert.match(text(tree), /Could not read the MCP servers from the plugin host \(HTTP 500\)/);
 });
 
 it('places the add action in the search toolbar and removes it from the header', async () => {

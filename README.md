@@ -1,5 +1,7 @@
 # dsh-mcp-manager
 
+> **0.22.1** hardens activation: a failure to register the authorization tool can no longer abort the plugin, and `Settings → MCP` now reports a host read failure instead of an empty catalog. See the [release notes](docs/release-v0.22.1.md).
+>
 > **0.22.0** keeps a server visible while it needs authentication: its last known tools stay registered, a call tells the model to authorize it, and `mcp_authenticate_server` starts that authorization from the conversation. The interface is English-only from this release. See the [release notes](docs/release-v0.22.0.md).
 
 **MCP server manager for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)** — a Settings → MCP page where you add MCP servers once (remote HTTP or local stdio process), authenticate HTTP servers with **OAuth in the browser**, and expose their tools either directly or through a compact on-demand broker.
