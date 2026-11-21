@@ -19,15 +19,17 @@ it('refreshes the token proactively on the ordinary RPC path', () => {
   assert.match(transport, /if \(repair\) await ensureFreshToken\(server\);/, 'mcpRpc refreshes before the first attempt');
 });
 
-it('does not repair during either connection handshake', () => {
-  // The Streamable HTTP handshake calls mcpRpc directly, with repair disabled.
+it('keeps the handshake separate from the live calls, and repairs live calls', () => {
+  const handshakeAt = transport.indexOf('const handshake = sseSessionCall(');
+  assert.ok(handshakeAt > 0, 'the SSE handshake table exists');
+  assert.match(transport.slice(handshakeAt, handshakeAt + 200), /repair: false/);
+  // A live table WITHOUT repair disabled is what makes the SSE replay reachable.
+  const liveAt = transport.indexOf('const live = sseSessionCall(');
+  assert.ok(liveAt > 0, 'the SSE live table exists');
+  assert.doesNotMatch(transport.slice(liveAt, liveAt + 140), /repair: false/);
+  // And the Streamable HTTP handshake stays non-repairing.
   const mcpHandshake = transport.indexOf("mcpRpc(server, 'notifications/initialized'");
-  assert.ok(mcpHandshake > 0, 'the Streamable HTTP handshake exists');
   assert.match(transport.slice(mcpHandshake, mcpHandshake + 200), /repair: false/);
-  // The SSE handshake builds its call table with repair disabled.
-  const sseHandshake = transport.indexOf('sseSessionCall(server, handle, session.endpointUrl, waiters');
-  assert.ok(sseHandshake > 0, 'the SSE handshake exists');
-  assert.match(transport.slice(sseHandshake, sseHandshake + 200), /repair: false/);
 });
 
 it('uses the shared dead-session predicate from both transport paths', () => {

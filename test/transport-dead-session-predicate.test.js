@@ -26,6 +26,15 @@ describe('isDeadSession', () => {
     assert.equal(isDeadSession(400, 'argument session is invalid: expected object'), false);
   });
 
+  it('reads the error message, not the whole payload', () => {
+    // A valid error whose *data* mentions a session must not qualify.
+    const withData = JSON.stringify({ error: { message: 'Invalid argument', data: { field: 'sessionId', hint: 'session not found' } } });
+    assert.equal(isDeadSession(400, withData), false);
+    // A tool named after a session must not qualify.
+    const unknownTool = JSON.stringify({ error: { message: 'Unknown tool: session_list' } });
+    assert.equal(isDeadSession(400, unknownTool), false);
+  });
+
   it('rejects every other status', () => {
     assert.equal(isDeadSession(401, 'invalid_token'), false);
     assert.equal(isDeadSession(403, 'insufficient_scope'), false);
