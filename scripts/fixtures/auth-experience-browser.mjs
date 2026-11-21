@@ -103,6 +103,10 @@ export async function readSurfacesInBrowser({ originPath, tokenPath, screenshotD
     assert.equal(surfaces.hasAuthorizationUrl, false, 'no authorization URL is embedded');
     assert.ok(surfaces.alert.top >= 0 && surfaces.alert.top < surfaces.viewport.height, 'the alert is on screen');
 
+    if (screenshotDir) {
+      await page.screenshot({ path: join(screenshotDir, 'alert-in-real-gui.png') });
+    }
+
     // Reload once more: whatever modal the application shows on this fresh profile
     // stays open, and the alert must remain visible above it.
     // (The previous comment described an earlier attempt; this is the real check.)
@@ -135,12 +139,10 @@ export async function readSurfacesInBrowser({ originPath, tokenPath, screenshotD
 
     if (screenshotDir) {
       mkdirSync(screenshotDir, { recursive: true });
-      await page.screenshot({ path: join(screenshotDir, 'alert-in-real-gui.png') });
-    }
-
-    if (screenshotDir) {
       await page.screenshot({ path: join(screenshotDir, 'alert-over-modal.png') });
     }
+
+
     return { ...surfaces, owned };
   } finally {
     await browser.close();
