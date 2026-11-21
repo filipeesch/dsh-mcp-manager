@@ -85,7 +85,7 @@ that no wait is created), `test/client-banner-compact.test.js` and
 `test/client-chat-auth.test.js` and `test/client-language.test.js` changed with the
 new banner format and the removal of provider text from the card.
 
-575 tests pass.
+The full suite passes.
 
 ## Upgrading
 

@@ -52,7 +52,7 @@ No stored data changes: no new state-file key, no token-shape change, no catalog
 
 ## Impact
 
-- `lib/index.js` shrinks by roughly 600 lines: the Streamable HTTP, HTTP-with-SSE and stdio transports
+- `lib/index.js` shrinks by roughly 600 lines: the Streamable HTTP and HTTP-with-SSE transports
   move to a transport module with injected ports (token access and refresh, status classification,
   attempt log, retained catalog, logger).
 - New `lib/transport/*` module; `lib/auth/gate.js` and `lib/auth/recovery.js` keep their contracts.

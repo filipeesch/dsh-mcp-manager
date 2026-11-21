@@ -163,7 +163,7 @@ describe('auth gate', () => {
     const waiting = gate.block(baseWait({ scope: 'workspace', workspacePath: '/repo', sessionId: 'session-a' }));
     timers.tick(1000);
     const first = gate.snapshot();
-    assert.deepEqual(Object.keys(first[0]).sort(), ['error', 'name', 'pending', 'phase', 'reason', 'remainingMs', 'scope', 'serverId', 'sessionId', 'workspacePath']);
+    assert.deepEqual(Object.keys(first[0]).sort(), ['error', 'name', 'pending', 'phase', 'reason', 'remainingMs', 'scope', 'serverId', 'sessionId', 'waitId', 'workspacePath']);
     assert.equal(first[0].phase, 'needs-auth');
     assert.equal(first[0].scope, 'workspace');
     assert.equal(first[0].workspacePath, '/repo');
