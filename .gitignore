@@ -6,3 +6,6 @@ pnpm-lock.yaml
 
 # Built artifacts are not part of the source tree.
 *.tgz
+
+# Generated UI screenshots for review (see scripts/render-auth-shots.mjs).
+screenshots/
