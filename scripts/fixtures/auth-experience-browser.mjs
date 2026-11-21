@@ -128,7 +128,7 @@ export async function readSurfacesInBrowser({ originPath, tokenPath, screenshotD
 
     if (screenshotDir) {
       mkdirSync(screenshotDir, { recursive: true });
-      await page.screenshot({ path: join(screenshotDir, 'alert-over-modal.png') });
+      await page.screenshot({ path: join(screenshotDir, 'alert-second-capture.png') });
     }
 
     return { ...surfaces, second };

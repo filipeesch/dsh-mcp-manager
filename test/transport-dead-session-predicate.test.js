@@ -20,9 +20,9 @@ describe('isDeadSession', () => {
     assert.equal(isDeadSession(404, rpcError('Session not found', -32600)), true);
     assert.equal(isDeadSession(400, 'Bad Request: Missing session ID'), true);
     assert.equal(isDeadSession(400, 'Request must be an initialize request if no session ID is provided.'), true);
-    assert.equal(isDeadSession(400, rpcError('Session expired')), true);
-    assert.equal(isDeadSession(404, rpcError('Unknown session')), true);
-    assert.equal(isDeadSession(400, rpcError('Invalid session ID')), true);
+    assert.equal(isDeadSession(400, rpcError('Session expired', -32600)), true);
+    assert.equal(isDeadSession(404, rpcError('Unknown session', -32600)), true);
+    assert.equal(isDeadSession(400, rpcError('Invalid session ID', -32600)), true);
   });
 
   it('rejects a request-shaped error that mentions a session', () => {
@@ -50,10 +50,13 @@ describe('isDeadSession', () => {
   it('separates an absent identifier from an invalid session', () => {
     // A payload-error code plus a MISSING identifier names an argument.
     assert.equal(isDeadSession(400, rpcError('Missing session ID', -32602)), false);
-    // The same code with an invalid or unknown session is a transport statement.
-    assert.equal(isDeadSession(400, rpcError('Unknown session', -32602)), true);
-    assert.equal(isDeadSession(400, rpcError('Invalid session ID', -32602)), true);
-    assert.equal(isDeadSession(400, rpcError('Session expired', -32602)), true);
+    // Any payload-error code means the request was malformed, so none of these
+    // describes the transport session, whatever the message says.
+    assert.equal(isDeadSession(400, rpcError('Unknown session', -32602)), false);
+    assert.equal(isDeadSession(400, rpcError('Invalid session ID', -32602)), false);
+    assert.equal(isDeadSession(400, rpcError('Session expired', -32602)), false);
+    assert.equal(isDeadSession(400, rpcError('Session ID is missing', -32602)), false);
+    assert.equal(isDeadSession(400, rpcError('Session ID required', -32602)), false);
   });
 
   it('ignores surrounding whitespace and a trailing period', () => {
@@ -62,7 +65,7 @@ describe('isDeadSession', () => {
   });
 
   it('accepts the state-first wording some servers use', () => {
-    assert.equal(isDeadSession(400, rpcError('Expired session')), true);
-    assert.equal(isDeadSession(400, rpcError('Invalidated session')), true);
+    assert.equal(isDeadSession(400, rpcError('Expired session', -32600)), true);
+    assert.equal(isDeadSession(400, rpcError('Invalidated session', -32600)), true);
   });
 });

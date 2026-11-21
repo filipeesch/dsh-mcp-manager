@@ -264,8 +264,10 @@ try {
   assert.equal(browser.hasAuthorizationUrl, false, 'the alert embeds no authorization URL');
   record('the frame-wide alert renders for a wait in another conversation', { ok: true, alert: browser.alert });
 
-  // The alert must stay legible and clickable in the composition the host really
-  // renders, including whatever modal it shows on a fresh profile.
+  // A second capture of the same composition, to confirm the card persists rather
+  // than flickering between polls. The Settings portal is not driven here: the host
+  // gates it behind surfaces this harness does not own, and a flaky assertion would
+  // be worse than the stated gap in task 6.3.
   // The alert is present on the Settings screen. Whether it wins the stacking order
   // depends on the host overlay layer, which this composition puts at z-index:20,
   // so it is reported rather than asserted; the modal rule is covered by the client
