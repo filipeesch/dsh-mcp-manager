@@ -264,6 +264,7 @@ try {
   // so this run cannot enter a conversation. With none open the wait stays owned by
   // a conversation the operator is not looking at, and the alert must keep standing.
   assert.ok(browser.owned.alert, 'the alert keeps standing while no conversation is open');
+  assert.ok(browser.owned.alert.top >= 0, 'the alert is on screen even over an open modal');
   assert.equal(browser.owned.alert.cards, 1, 'still exactly one card for the one wait');
   record('the alert stands while no conversation is open', { ok: true });
   // The banner inside an open conversation is covered by the client suites, which

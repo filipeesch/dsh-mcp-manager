@@ -103,7 +103,9 @@ export async function readSurfacesInBrowser({ originPath, tokenPath, screenshotD
     assert.equal(surfaces.hasAuthorizationUrl, false, 'no authorization URL is embedded');
     assert.ok(surfaces.alert.top >= 0 && surfaces.alert.top < surfaces.viewport.height, 'the alert is on screen');
 
-    // Now make the app believe it is looking at the owning conversation, so the
+    // Reload once more: whatever modal the application shows on this fresh profile
+    // stays open, and the alert must remain visible above it.
+    // (The previous comment described an earlier attempt; this is the real check.)
     // banner (not the alert) is the surface that reports the same wait.
     await page.evaluate((owner) => {
       localStorage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: owner }));
@@ -121,6 +123,7 @@ export async function readSurfacesInBrowser({ originPath, tokenPath, screenshotD
         const style = getComputedStyle(element);
         return {
           width: Math.round(rect.width),
+          top: Math.round(rect.top),
           borderRadius: style.borderRadius,
           text: (element.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 240),
           rows: element.querySelectorAll('.mm_authRow').length,
@@ -136,7 +139,7 @@ export async function readSurfacesInBrowser({ originPath, tokenPath, screenshotD
     }
 
     if (screenshotDir) {
-      await page.screenshot({ path: join(screenshotDir, 'banner-in-real-gui.png') });
+      await page.screenshot({ path: join(screenshotDir, 'alert-over-modal.png') });
     }
     return { ...surfaces, owned };
   } finally {
