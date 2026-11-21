@@ -39,5 +39,5 @@
 
 - [x] 6.1 Bump `version` to 0.23.0 in `package.json` and update `README.md` and `AGENTS.md` with the transport module, the dead-session repair, the compact banner, the alert and the card changes; verify the documented layout matches the files on disk and `npm test` passes
 - [x] 6.2 Run the full suite and verify every pre-existing test still passes, including `test/auth-blocking.test.js`, `test/attention-api.test.js` and `test/oauth-callback-flow.test.js`
-- [ ] 6.3 Verify the change end to end in a disposable web profile against a loopback MCP server whose session can be invalidated: a call that hits the dead session succeeds, the banner renders compact, and the alert appears from another conversation with both actions working
+- [x] 6.3 Verify the change end to end in a disposable web profile against a loopback MCP server whose session can be invalidated: a call that hits the dead session succeeds, the banner renders compact, and the alert appears from another conversation with both actions working
 - [x] 6.4 Verify `git diff --cached | grep -n '^\ No newline at end of file'` prints `ok`, then commit on the branch and create an annotated tag

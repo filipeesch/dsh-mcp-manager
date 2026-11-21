@@ -84,6 +84,22 @@ then restart `dsh --profile web` and reload the page. The API liveness probe is 
 
 Tests that may read or write a real profile must also set scratch `HOME`, `USERPROFILE`, and `DSH_HOME` before importing modules that resolve profile paths. `homedir()` uses `USERPROFILE` on Windows, and module-level paths can be fixed at import time; see `test/oauth-discovery.test.js` for an isolation assertion.
 
+End-to-end acceptance of the authentication experience:
+
+```sh
+node scripts/verify-auth-experience-dsh.mjs <dsh checkout> [--json]
+```
+
+It installs the plugin into a disposable web profile, boots the real launcher
+against a loopback MCP server, invalidates the transport session, and asserts that
+a call hitting it still succeeds and creates no authentication wait; then it
+authorizes a second server, revokes that credential, and reads the parked wait and
+the frame-wide alert from the real GUI in Chromium. It fails on the exact
+`404 Session not found` when the repair is removed, so a pass is evidence. Every
+path stays under one temporary directory; `MM_KEEP_SCRATCH=1` keeps it and
+`MM_SHOT_DIR=<dir>` also writes the GUI screenshot. Playwright and Chromium are
+resolved from the checkout passed in, and are not plugin dependencies.
+
 Real-harness verification of the 0.2.x contract: `node scripts/verify-deferral-dsh.mjs <npm prefix containing @deepseek-ai/dsh>` boots a disposable profile with a mock MCP server and asserts the assembly, the hiding mechanism (`deferLoading` on `0.2.2+`, the waterfall filter on `0.2.1`), broker dispatch, PTC access and the toggle — no model request is submitted. Run it once per declared `0.2.*` release; the result JSON records the contract it observed, so a `0.2.1` pass is not evidence for `0.2.2`.
 
 The broker's harness-facing contract is covered by `test/broker-presentation.test.js` (waterfall payloads, per-assembly mode changes) and `test/on-demand-deferral.test.js` (missing `tools` array, `deferLoading` marking and the toggle re-registration); run both when touching tool registration or the guards.

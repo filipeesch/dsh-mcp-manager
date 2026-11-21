@@ -90,6 +90,30 @@ new banner format and the removal of provider text from the card.
 
 The full suite passes.
 
+## Acceptance run
+
+`scripts/verify-auth-experience-dsh.mjs <dsh checkout>` installs the plugin into a
+disposable web profile and boots the real launcher against a loopback MCP server
+whose transport session can be invalidated. It then drives, in order:
+
+1. the plugin registering `mcp__database__echo` in the real host;
+2. the server forgetting every session it issued;
+3. a tool call that hits the dead session — and succeeds;
+4. the attention listing staying empty, because a repair is not an auth wait;
+5. a real OAuth authorization against the same server;
+6. that credential revoked, so the next call parks in the gate;
+7. the frame-wide alert, read from the real GUI in Chromium, naming the server and
+   offering both actions with no authorization URL in the DOM.
+
+It exits non-zero when the repair is removed, failing on the exact
+`404 Session not found` this release exists to stop — so a pass is evidence, not
+an assertion about itself. The run keeps its profile, home and artifacts under one
+temporary directory and never touches `~/.dsh`.
+
+The banner inside an open conversation is covered by the client suites, which
+render the real component with a conversation identity: entering a conversation
+needs a saved session, which this run deliberately does not create.
+
 ## Upgrading
 
 No stored data changes: no new state key, no token-shape change, no catalog
