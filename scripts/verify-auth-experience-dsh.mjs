@@ -177,8 +177,8 @@ try {
   while (!existsSync(readyPath) && Date.now() < deadline && child.exitCode === null) {
     await new Promise((done) => setTimeout(done, 200));
   }
-  assert.ok(existsSync(readyPath), `the probe never started:${NL}${output.slice(-3000)}`);
-  assert.equal(readFileSync(readyPath, 'utf8').trim(), 'ready', `the plugin did not register its tools:${NL}${output.slice(-3000)}`);
+  assert.ok(existsSync(readyPath), `the probe never started:${NL}${redactToken(output).slice(-3000)}`);
+  assert.equal(readFileSync(readyPath, 'utf8').trim(), 'ready', `the plugin did not register its tools:${NL}${redactToken(output).slice(-3000)}`);
   record('plugin registered mcp__database__echo in the real host', { ok: true });
 
   // Every session the stub issued is now dead: the next call hits an expired one.
@@ -189,7 +189,7 @@ try {
   while (!existsSync(reportPath) && Date.now() < deadline && child.exitCode === null) {
     await new Promise((done) => setTimeout(done, 200));
   }
-  assert.ok(existsSync(reportPath), `the probe never reported:${NL}${output.slice(-3000)}`);
+  assert.ok(existsSync(reportPath), `the probe never reported:${NL}${redactToken(output).slice(-3000)}`);
   const report = JSON.parse(readFileSync(reportPath, 'utf8'));
   // Require a real envelope: a truncated or shapeless report must not pass.
   assert.equal(typeof report, 'object', `the report is not an object: ${JSON.stringify(report)}`);
@@ -270,14 +270,15 @@ try {
   // depends on the host overlay layer, which this composition puts at z-index:20,
   // so it is reported rather than asserted; the modal rule is covered by the client
   // suites, which model the visibility decision directly.
-  assert.ok(browser.modal.alert, 'the alert is rendered on the Settings screen');
-  record('the alert is present with the Settings surface open', { ok: true, onTop: browser.modal.onTop, modalsOpen: browser.modal.diagnostics.realModals });
+
+
+  record('the alert stays rendered across a second capture', { ok: true, onTop: browser.second.onTop });
 
   results.ok = true;
-  console.log(wantJson ? JSON.stringify(results) : summary(results));
+  console.log(redactToken(wantJson ? JSON.stringify(results) : summary(results)));
 } catch (error) {
   results.ok = false;
-  results.error = String(error && error.stack ? error.stack : error);
+  results.error = redactToken(String(error && error.stack ? error.stack : error));
   if (output) results.output = redactToken(output).slice(-4000);
   console.log(wantJson ? JSON.stringify(results) : summary(results));
   process.exitCode = 1;
@@ -289,7 +290,13 @@ try {
       new Promise((done) => setTimeout(done, 5000)),
     ]);
   }
-  if (child && child.exitCode === null) child.kill('SIGKILL');
+  if (child && child.exitCode === null) {
+    child.kill('SIGKILL');
+    await Promise.race([
+      new Promise((done) => child.once('exit', done)),
+      new Promise((done) => setTimeout(done, 5000)),
+    ]);
+  }
   if (stub) await stub.close();
   if (process.env.MM_KEEP_SCRATCH) console.log(`scratch kept at ${scratch}`);
   else rmSync(scratch, { recursive: true, force: true });

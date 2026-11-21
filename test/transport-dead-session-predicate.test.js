@@ -46,4 +46,23 @@ describe('isDeadSession', () => {
     assert.equal(isDeadSession(500, 'Session not found'), false);
     assert.equal(isDeadSession(200, 'Session'), false);
   });
+
+  it('separates an absent identifier from an invalid session', () => {
+    // A payload-error code plus a MISSING identifier names an argument.
+    assert.equal(isDeadSession(400, rpcError('Missing session ID', -32602)), false);
+    // The same code with an invalid or unknown session is a transport statement.
+    assert.equal(isDeadSession(400, rpcError('Unknown session', -32602)), true);
+    assert.equal(isDeadSession(400, rpcError('Invalid session ID', -32602)), true);
+    assert.equal(isDeadSession(400, rpcError('Session expired', -32602)), true);
+  });
+
+  it('ignores surrounding whitespace and a trailing period', () => {
+    assert.equal(isDeadSession(400, '  Bad Request: Missing session ID.  '), true);
+    assert.equal(isDeadSession(404, ' Session not found '), true);
+  });
+
+  it('accepts the state-first wording some servers use', () => {
+    assert.equal(isDeadSession(400, rpcError('Expired session')), true);
+    assert.equal(isDeadSession(400, rpcError('Invalidated session')), true);
+  });
 });

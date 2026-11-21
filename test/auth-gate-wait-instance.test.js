@@ -39,3 +39,13 @@ it('mints a new id when the same session waits again', () => {
   assert.notEqual(first, second, 'a returning session is a new wait instance');
   gate.dispose();
 });
+it('does not collide when a key or a session contains the separator', () => {
+  // `id:x@y` with session `z` and `id:x` with session `y@z` are different pairs.
+  const gate = createAuthGate({ budgetMs: 60000, now: () => 1000, setTimeoutFn: () => 1, clearTimeoutFn: () => {} });
+  gate.block(base({ key: 'id:x@y', sessionId: 'z' })).catch(() => {});
+  gate.block(base({ key: 'id:x', sessionId: 'y@z' })).catch(() => {});
+  const rows = gate.snapshot();
+  assert.equal(rows.length, 2, 'two pairs produce two rows');
+  assert.notEqual(rows[0].waitId, rows[1].waitId, 'the two pairs must not share an instance id');
+  gate.dispose();
+});

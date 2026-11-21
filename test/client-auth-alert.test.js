@@ -32,7 +32,7 @@ function waiting(overrides = {}) {
 }
 
 /** Mount the overlay slot with a chosen persisted selection. */
-function mount(fetch, { selected = OTHER, titles = {}, openSession = undefined, modalOpen = false } = {}) {
+function mount(fetch, { selected = OTHER, titles = {}, openSession = undefined, modalOpen = false, window: windowStub = undefined } = {}) {
   const storage = {
     getItem: (key) => (key === 'dsh.sessions.current' ? JSON.stringify({ sessionId: selected }) : null),
   };
@@ -41,7 +41,11 @@ function mount(fetch, { selected = OTHER, titles = {}, openSession = undefined, 
     createElement: () => ({ dataset: {}, textContent: '' }),
     head: { appendChild: () => {} },
   };
-  const app = mountClient(fetch, 'en', { localStorage: storage, document: documentStub });
+  const app = mountClient(fetch, 'en', {
+    localStorage: storage,
+    document: documentStub,
+    ...(windowStub ? { window: windowStub } : {}),
+  });
   const alert = () => app.slot('shell.overlay');
   const render = () => app.render(alert(), { t: app.t, sessionTitles: titles, openSession });
   return { app, render };
@@ -195,4 +199,36 @@ it('states what the alert wants before naming the server', async () => {
   // The heading must precede the server name, so it reads as the reason.
   const ordered = text(tree).indexOf('Authentication required') < text(tree).indexOf('database');
   assert.equal(ordered, true, 'the requirement is stated before the server');
+});
+
+it('reopens the cached authorization URL instead of starting a second flow', async () => {
+  const calls = [];
+  const opened = [];
+  const fetch = async (url) => {
+    calls.push(url);
+    if (url.endsWith('/attention')) return listing([waiting()]);
+    if (url.endsWith('/auth')) return response({ authorizeUrl: 'https://provider.example/authorize?state=s1' });
+    return response({});
+  };
+  // The first popup is blocked, so the card caches the URL and offers a retry.
+  let allow = false;
+  const { app, render } = mount(fetch, {
+    window: { open: (target) => { opened.push(target); return allow ? {} : null; } },
+  });
+  render();
+  app.effects();
+  await settle();
+  nodes(render()).find((node) => node.type === 'button' && text(node).trim() === 'Authenticate').props.onClick();
+  await settle();
+  const authCalls = () => calls.filter((url) => url.endsWith('/auth')).length;
+  assert.equal(authCalls(), 1, 'the first attempt started one flow');
+
+  // Now the operator allows the popup and uses the retry action.
+  allow = true;
+  const retry = nodes(render()).find((node) => node.type === 'button' && text(node).trim() === 'Open the authorization page again');
+  assert.ok(retry, 'a blocked popup offers a retry');
+  retry.props.onClick();
+  await settle();
+  assert.equal(authCalls(), 1, 'the retry did not start a second authorization flow');
+  assert.equal(opened.at(-1), 'https://provider.example/authorize?state=s1', 'the retry reopened the same URL');
 });
