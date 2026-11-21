@@ -1,5 +1,7 @@
 # dsh-mcp-manager
 
+> **0.23.0** repairs a dead MCP transport session inside the transport instead of failing the call, turns the conversation banner into a compact card on the composer's geometry, keeps provider error text in the attempt log, and announces a wait owned by another conversation on a frame-wide alert. See the [release notes](docs/release-v0.23.0.md).
+>
 > **0.22.2** fixes every turn failing with `Cannot read properties of undefined (reading 'kind')`: the `agent/pre-step` observer now forwards the waterfall instead of vetoing it. See the [release notes](docs/release-v0.22.2.md).
 >
 > **0.22.1** hardens activation: a failure to register the authorization tool can no longer abort the plugin, and `Settings → MCP` now reports a host read failure instead of an empty catalog. See the [release notes](docs/release-v0.22.1.md).

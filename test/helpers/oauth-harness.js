@@ -96,6 +96,13 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
   const forms = [];
   const registrations = [];
   const toolCalls = [];
+  // Session ids the server once issued and no longer accepts, so a test can
+  // reproduce the "the server forgot this session" shape a real MCP server sends.
+  const deadSessions = new Set();
+  let sessionIssued = 0;
+  let deadSessionBodies = 0;
+  // When set, every presented session is rejected: the rebuild cannot succeed either.
+  let rejectEverySession = false;
   /** sessionId -> SSE response stream, for the legacy HTTP-with-SSE mode. */
   const sseSessions = new Map();
   /** client_id -> client_secret issued by a confidential registration */
@@ -154,6 +161,13 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
       }
       if (req.url === '/mcp') {
         const bearer = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+        // A session the server forgot answers the way a real MCP server does:
+        // a client error whose own words name the session.
+        const presentedSession = req.headers['mcp-session-id'];
+        if (presentedSession && (rejectEverySession || deadSessions.has(presentedSession))) {
+          deadSessionBodies += 1;
+          return send(404, { jsonrpc: '2.0', id: 'server-error', error: { code: -32600, message: 'Session not found' } });
+        }
         if (bearer.startsWith('access-') && !revoked.has(bearer)) {
           const message = JSON.parse(raw || '{}');
           if (message.id === undefined) return send(202, '');
@@ -166,7 +180,11 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
           const result = message.method === 'initialize'
             ? { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'oauth-stub', version: '1' } }
             : message.method === 'tools/list' ? { tools: [{ name: 'echo', inputSchema: { type: 'object' } }] } : {};
-          return send(200, { jsonrpc: '2.0', id: message.id, result });
+          // Streamable HTTP hands the client a session id on initialize.
+          const headers = message.method === 'initialize'
+            ? { 'mcp-session-id': 'session-' + (++sessionIssued) }
+            : {};
+          return send(200, { jsonrpc: '2.0', id: message.id, result }, headers);
         }
         return send(401, { error: 'unauthorized' }, {
           'WWW-Authenticate': `Bearer error="invalid_request", resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`,
@@ -235,6 +253,15 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
         registrations,
         toolCalls,
         revoked,
+        deadSessions,
+        /** Reject every presented session, so a rebuild cannot recover. */
+        rejectSessions(value = true) { rejectEverySession = value; },
+        /** Forget every issued session, the way a restarted server would. */
+        forgetSessions() {
+          for (let i = 1; i <= sessionIssued; i += 1) deadSessions.add('session-' + i);
+        },
+        /** How many requests were rejected as a dead session. */
+        get deadSessionBodies() { return deadSessionBodies; },
         async close() {
           server.closeAllConnections?.();
           await new Promise((done) => server.close(done));

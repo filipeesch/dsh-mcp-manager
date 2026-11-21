@@ -12,6 +12,14 @@ import { runInNewContext } from 'node:vm';
 export const clientSource = readFileSync(new URL('../../lib/client.js', import.meta.url), 'utf8');
 
 export function mountClient(fetch, language = 'en', globals = {}) {
+  // The client half injects one <style> tag; keeping its text lets a test assert
+  // the geometry a class declares without a browser.
+  const styles = [];
+  const documentStub = {
+    querySelector: () => null,
+    createElement: () => ({ dataset: {}, textContent: '' }),
+    head: { appendChild: (tag) => { styles.push(tag.textContent); } },
+  };
   let spec;
   const effectLabels = [];
   let exported, Section;
@@ -32,6 +40,7 @@ export function mountClient(fetch, language = 'en', globals = {}) {
   };
   runInNewContext(clientSource, {
     fetch,
+    document: globals.document ?? documentStub,
     setInterval: () => 1,
     clearInterval: () => {},
     setTimeout: () => 1,
@@ -64,6 +73,8 @@ export function mountClient(fetch, language = 'en', globals = {}) {
     slot(name) { return registrations.find((entry) => entry.options?.name === name)?.component; },
     slotOptions(name) { return registrations.find((entry) => entry.options?.name === name)?.options; },
     get inject() { return exported.inject; },
+    /** The stylesheet the client half injected, for geometry assertions. */
+    get css() { return styles.join(String.fromCharCode(10)); },
     effectLabels,
     dispose() { if (typeof dispose === 'function') dispose(); },
     render(component = Section, props) {

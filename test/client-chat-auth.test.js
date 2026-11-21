@@ -86,7 +86,7 @@ it('renders one row per waiting server owned by this session', async () => {
   assert.equal(rows.length, 2, 'only calls of this session are listed');
   const labels = rows.map((row) => text(row).replace(/\s+/g, ' '));
   assert.match(labels[0], /database/);
-  assert.match(labels[0], /invalid_token/);
+  assert.doesNotMatch(labels[0], /invalid_token/, 'provider token wording stays out of the row');
   assert.match(labels[0], /1 call\(s\) waiting/);
   assert.match(labels[0], /1:30 left/);
   assert.match(labels[1], /workspace/);
@@ -174,7 +174,8 @@ it('starts a workspace authorization through the workspace endpoint', async () =
   await settle();
   const call = calls.find((entry) => entry.url.endsWith('/workspaces/auth'));
   assert.equal(call.method, 'POST');
-  assert.deepEqual(JSON.parse(call.body), { path: '/repo', name: 'database' });
+  // A wait surface asks to join a live flow, so the flag is part of the request.
+  assert.deepEqual(JSON.parse(call.body), { path: '/repo', name: 'database', reuse: true });
 });
 
 it('cancels the waiting calls and drops the row', async () => {

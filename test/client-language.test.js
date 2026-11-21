@@ -178,13 +178,14 @@ it('shows a collapsed connection error and lazily loads the attempt log', async 
 
   // The reason is visible without expanding the card...
   const collapsed = renderCard(cardNode(tree));
-  assert.match(text(collapsed), /may not support dynamic client registration/);
+  assert.doesNotMatch(text(collapsed), /may not support dynamic client registration/, 'no provider text on the collapsed card');
+  assert.match(text(collapsed), /Error/, 'the status still reports the failure');
   assert.doesNotMatch(text(collapsed), /Logs/, 'the log toggle lives in the expanded card');
   assert.ok(!calls.some((url) => url.endsWith('/logs')), 'logs must not be fetched until requested');
 
   // ...and expanding the card reveals the log toggle in the action row.
   let card = renderCard({ type: cardNode(tree).type, props: { ...cardNode(tree).props, open: true } });
-  assert.match(text(card), /may not support dynamic client registration/, 'the reason stays visible while expanded');
+  assert.doesNotMatch(text(card), /may not support dynamic client registration/, 'no provider text on the expanded card either');
   const toggleEl = nodes(card).find((node) => typeof node.type === 'function' && node.props?.log);
   assert.ok(toggleEl, 'the log toggle sits in the action row');
   const toggleAt = nodes(card).indexOf(toggleEl);
@@ -733,4 +734,58 @@ it('renders the callback section labels and status line', async () => {
   let section = app.render(sectionEl.type, sectionEl.props);
   assert.match(text(section), /OAuth callback/);
   section = app.render(sectionEl.type, sectionEl.props);
+});
+it('offers Reauthenticate for an OAuth server whatever its status', async () => {
+  const connected = { id: 'srv-reauth', name: 'db', type: 'http', url: 'https://x.test/mcp', authMode: 'oauth', status: 'connected', error: '', toolCount: 1, enabled: true };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [connected] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  app.render(); app.effects(); await settle();
+  const tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-reauth');
+  app.reset();
+  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  const labels = nodes(card).filter((node) => node.type === 'button').map((node) => text(node).trim());
+  assert.ok(labels.includes('Reauthenticate'), 'a connected OAuth server can be reauthenticated: ' + labels.join(', '));
+});
+
+it('offers no Reauthenticate where no browser flow exists', async () => {
+  const staticServer = { id: 'srv-static', name: 'internal', type: 'http', url: 'https://x.test/mcp', authMode: 'static', status: 'connected', error: '', toolCount: 1, enabled: true };
+  const stdioServer = { id: 'srv-stdio', name: 'local', type: 'stdio', command: 'x', status: 'connected', error: '', toolCount: 1, enabled: true };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [staticServer, stdioServer] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  app.render(); app.effects(); await settle();
+  const tree = app.render();
+  for (const id of ['srv-static', 'srv-stdio']) {
+    const cardNode = nodes(tree).find((node) => node.props?.server?.id === id);
+    app.reset();
+    const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+    const labels = nodes(card).filter((node) => node.type === 'button').map((node) => text(node).trim());
+    assert.ok(!labels.includes('Reauthenticate'), id + ' must not offer Reauthenticate');
+  }
+});
+
+it('states an insufficient scope as a neutral note, not an error', async () => {
+  const server = { id: 'srv-scope', name: 'db', type: 'http', url: 'https://x.test/mcp', authMode: 'oauth', status: 'needs-auth', error: '', toolCount: 0, enabled: true, insufficientScope: { scope: 'feed:read' } };
+  const app = mount(async (url) => {
+    if (url.endsWith('/servers')) return response({ servers: [server] });
+    if (url.endsWith('/workspaces')) return response({ workspaces: [] });
+    if (url.endsWith('/settings')) return response({ onDemandToolInjection: false });
+    return response({});
+  });
+  app.render(); app.effects(); await settle();
+  const tree = app.render();
+  const cardNode = nodes(tree).find((node) => node.props?.server?.id === 'srv-scope');
+  app.reset();
+  const card = app.render(cardNode.type, { ...cardNode.props, open: true });
+  const note = nodes(card).find((node) => node.props?.className === 'mm_scopeNote');
+  assert.ok(note, 'the scope requirement is stated');
+  assert.match(text(note), /feed:read/);
 });
