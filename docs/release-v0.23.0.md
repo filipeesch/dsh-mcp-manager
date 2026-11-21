@@ -58,6 +58,11 @@ same flow and does not navigate away, so the waiting conversation resumes on its
 own. The alert stays for as long as its wait exists, can be dismissed without
 cancelling it, and returns for a later wait of the same server.
 
+It renders in the host overlay slot. Where the host promotes a top-layer surface of its
+own — a first-run notice, for example — that surface covers the card until dismissed; the
+alert keeps its content and actions and is fully operable afterwards. Outranking a
+host-owned modal would need a host-supported layer, which the client half does not have.
+
 It reads the open conversation from the application's persisted selection, because
 the overlay is root-scoped and receives no session identity. An unreadable
 selection is treated as "no conversation visible", so the alert shows: an extra

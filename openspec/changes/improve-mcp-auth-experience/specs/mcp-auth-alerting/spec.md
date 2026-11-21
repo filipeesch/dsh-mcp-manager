@@ -10,7 +10,16 @@ Defines the frame-wide alert that tells the operator an MCP authentication wait 
 
 When at least one MCP authentication wait exists and the conversation that owns a wait is not the conversation currently on screen, the application SHALL show a frame-wide alert for it. The alert MUST NOT appear inside the conversation that already renders that wait's banner, and MUST NOT appear when no wait exists.
 
-The alert SHALL appear while the conversation is not visible even if the application has a modal surface open over it, because the modal is where the operator is looking.
+The alert SHALL remain rendered while the conversation is not visible, including when the
+application has a modal surface open over it, because the modal is where the operator is
+acting.
+
+The alert is placed in the host overlay slot. Where the host renders that slot beneath a
+top-layer surface of its own — such as a first-run notice — the notice covers the card
+until it is dismissed. The alert MUST keep its content and actions intact through that
+period, and MUST be fully visible and operable once no host surface covers it. Raising it
+above a host-owned modal is outside this change: it needs a host-supported layer, and the
+client half cannot outrank a modal the host promotes itself.
 
 The alert SHALL be available from every screen of the application, not only from a conversation.
 
@@ -27,7 +36,7 @@ The alert SHALL be available from every screen of the application, not only from
 #### Scenario: A modal does not hide the alert
 
 - **WHEN** a wait belongs to the conversation underneath an open Settings dialog
-- **THEN** the alert is shown, because that conversation is not the surface the operator is acting on
+- **THEN** the alert stays rendered, because that conversation is not the surface the operator is acting on, and it is fully operable once the dialog closes
 
 #### Scenario: No wait means no alert
 

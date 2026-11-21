@@ -28,7 +28,10 @@ async function attention(base, cookie) {
     const response = await fetch(`${base}/mcp-manager/api/attention`, { headers: { cookie } });
     if (!response.ok) return { ok: false, status: response.status };
     const body = await response.json();
-    return { ok: true, items: Array.isArray(body.items) ? body.items : [] };
+    // A malformed body is a failed read, not an empty listing: coercing it to []
+    // would make "no wait exists" pass for the wrong reason.
+    if (!Array.isArray(body.items)) return { ok: false, error: 'the listing carried no items array' };
+    return { ok: true, items: body.items };
   } catch (error) {
     return { ok: false, error: String(error && error.message) };
   }
@@ -45,6 +48,13 @@ async function callTool(ctx, name, args, sessionId) {
   }
   try {
     const result = await definition.execute(args, { agent: { id: sessionId } });
+    // A tool may answer with an error envelope instead of throwing; a call that
+    // reports isError was not repaired, so it must not count as success.
+    if (result && result.isError === true) {
+      entry.ok = false;
+      entry.error = 'the tool reported isError';
+      return entry;
+    }
     entry.ok = true;
     entry.result = typeof result === 'string' ? result.slice(0, 300) : 'ok';
   } catch (error) {

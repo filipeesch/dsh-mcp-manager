@@ -182,3 +182,17 @@ it('states a scope requirement neutrally and a failed attempt as an error', asyn
   assert.ok(note, 'the scope requirement is a neutral note');
   assert.equal(nodes(tree).find((node) => node.props?.className === 'mm_alertErr'), undefined, 'it is not painted as an error');
 });
+
+it('states what the alert wants before naming the server', async () => {
+  const { app, render } = mount(async () => listing([waiting()]));
+  render();
+  app.effects();
+  await settle();
+  const tree = render();
+  const title = nodes(tree).find((node) => node.props?.className === 'mm_alertTitle');
+  assert.ok(title, 'the card carries a requirement heading');
+  assert.equal(text(title), 'Authentication required');
+  // The heading must precede the server name, so it reads as the reason.
+  const ordered = text(tree).indexOf('Authentication required') < text(tree).indexOf('database');
+  assert.equal(ordered, true, 'the requirement is stated before the server');
+});

@@ -255,7 +255,7 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
         revoked,
         deadSessions,
         /** Reject every presented session, so a rebuild cannot recover. */
-        rejectSessions(value = true) { rejectEverySession = value; }, 
+        rejectSessions(value = true) { rejectEverySession = value; },
         /** Forget every issued session, the way a restarted server would. */
         forgetSessions() {
           for (let i = 1; i <= sessionIssued; i += 1) deadSessions.add('session-' + i);
