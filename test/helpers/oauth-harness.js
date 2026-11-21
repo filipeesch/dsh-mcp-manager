@@ -101,6 +101,8 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
   const deadSessions = new Set();
   let sessionIssued = 0;
   let deadSessionBodies = 0;
+  // When set, every presented session is rejected: the rebuild cannot succeed either.
+  let rejectEverySession = false;
   /** sessionId -> SSE response stream, for the legacy HTTP-with-SSE mode. */
   const sseSessions = new Map();
   /** client_id -> client_secret issued by a confidential registration */
@@ -162,7 +164,7 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
         // A session the server forgot answers the way a real MCP server does:
         // a client error whose own words name the session.
         const presentedSession = req.headers['mcp-session-id'];
-        if (presentedSession && deadSessions.has(presentedSession)) {
+        if (presentedSession && (rejectEverySession || deadSessions.has(presentedSession))) {
           deadSessionBodies += 1;
           return send(404, { jsonrpc: '2.0', id: 'server-error', error: { code: -32600, message: 'Session not found' } });
         }
@@ -252,6 +254,8 @@ export async function startAuthorizationStub({ failToken = false, failRefresh = 
         toolCalls,
         revoked,
         deadSessions,
+        /** Reject every presented session, so a rebuild cannot recover. */
+        rejectSessions(value = true) { rejectEverySession = value; }, 
         /** Forget every issued session, the way a restarted server would. */
         forgetSessions() {
           for (let i = 1; i <= sessionIssued; i += 1) deadSessions.add('session-' + i);

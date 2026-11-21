@@ -101,3 +101,19 @@ it('does not reconnect when nothing named a session', { timeout: 15000 }, async 
 
   assert.equal(stub.deadSessionBodies, 0);
 });
+it('surfaces a second failure instead of retrying forever', { timeout: 15000 }, async (t) => {
+  const stub = await startAuthorizationStub();
+  t.after(() => stub.close());
+  const app = mount(t);
+  await connectServer(app, stub);
+  // Every session is rejected, so the rebuilt session cannot recover either.
+  stub.rejectSessions();
+  const definition = app.tool('mcp__database__echo');
+  const before = stub.toolCalls.length;
+  await assert.rejects(
+    () => definition.execute({}, { agent: { id: 'session-a' } }),
+    /expired|reconnect failed|non-JSON/,
+    'the caller receives the failure rather than an endless retry',
+  );
+  assert.ok(stub.toolCalls.length - before <= 1, 'at most one replay was attempted');
+});
