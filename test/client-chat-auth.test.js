@@ -174,7 +174,8 @@ it('starts a workspace authorization through the workspace endpoint', async () =
   await settle();
   const call = calls.find((entry) => entry.url.endsWith('/workspaces/auth'));
   assert.equal(call.method, 'POST');
-  assert.deepEqual(JSON.parse(call.body), { path: '/repo', name: 'database' });
+  // A wait surface asks to join a live flow, so the flag is part of the request.
+  assert.deepEqual(JSON.parse(call.body), { path: '/repo', name: 'database', reuse: true });
 });
 
 it('cancels the waiting calls and drops the row', async () => {
