@@ -78,8 +78,11 @@ deliberately not moved: neither is affected by a transport session.
 
 New: `test/transport-port-contract.test.js` (the port contract, including that a
 missing port fails and a supplied one works), `test/transport-dead-session.test.js`
-(repair, replay, the tool list following the new session, a second failure, and
-that no wait is created), `test/client-banner-compact.test.js` and
+(repair, replay, the tool list following the new session, and that no wait is
+created), `test/transport-dead-session-predicate.test.js` (the predicate against the
+measured bodies and the session-shaped payload errors), `test/auth-gate-wait-instance.test.js`
+(a later wait is a new instance) and `test/transport-regressions.test.js` (the HTTP default
+and the proactive refresh), `test/client-banner-compact.test.js` and
 `test/client-auth-alert.test.js`.
 
 `test/client-chat-auth.test.js` and `test/client-language.test.js` changed with the
